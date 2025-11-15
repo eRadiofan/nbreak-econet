@@ -36,6 +36,10 @@ Connect the components as shown in the schematic:
 
 **Note:** Power the RS485 driver modules from **3.3 V**.
 
+Final assembly complete with Econet plug ready for use:
+
+![Hardware schematic](docs/hardware.jpg)
+
 ## Firmware Installation
 
 Firmware is built and flashed using **idf.py** with the ESP-IDF toolchain.
