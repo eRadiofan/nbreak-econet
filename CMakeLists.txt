@@ -11,7 +11,5 @@
 cmake_minimum_required(VERSION 3.16)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-include($ENV{IDF_PATH}/components/spiffs/project_include.cmake)
-
 project(EconetWiFi)
 

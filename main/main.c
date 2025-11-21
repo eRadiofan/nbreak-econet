@@ -19,7 +19,7 @@
 
 #include "config.h"
 #include "esp_log.h"
-#include "esp_spiffs.h"
+#include "esp_littlefs.h"
 
 #include "wifi.h"
 #include "http.h"
@@ -36,13 +36,15 @@
 #define CLK_FREQ_HZ 100000
 
 void init_fs(void) {
-    esp_vfs_spiffs_conf_t conf = {
+    esp_vfs_littlefs_conf_t conf = {
         .base_path = "/fs",
         .partition_label = "storage",
         .format_if_mount_failed = true,
-        .max_files = 16,
+        .dont_mount = false,
     };
-    ESP_ERROR_CHECK(esp_vfs_spiffs_register(&conf));
+    ESP_ERROR_CHECK(esp_vfs_littlefs_register(&conf));
+
+    
 }
 
 void print_task_list(void)
