@@ -10,17 +10,18 @@
  * See the LICENSE file in the project root for full license information.
  */
 
+#include <stdio.h>
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "config.h"
 
 config_wifi_t config_wifi;
-config_econet_t config_econet;
 
 static const char *TAG = "config";
+static const char *ECONET_CONFIG_FILE = "/user/econet_cfg.bin";
 
-static esp_err_t _save_config(const char* config_name, const void* value, size_t length)
+static esp_err_t _save_config(const char *config_name, const void *value, size_t length)
 {
     nvs_handle_t h;
     ESP_RETURN_ON_ERROR(nvs_open("config", NVS_READWRITE, &h), TAG, "nvs_open");
@@ -30,7 +31,7 @@ static esp_err_t _save_config(const char* config_name, const void* value, size_t
     return err;
 }
 
-static esp_err_t _load_config(const char* config_name, void* value, size_t length)
+static esp_err_t _load_config(const char *config_name, void *value, size_t length)
 {
     nvs_handle_t h;
     esp_err_t err = nvs_open("config", NVS_READONLY, &h);
@@ -62,23 +63,142 @@ esp_err_t config_load_wifi(void)
     return ESP_OK;
 }
 
-esp_err_t config_save_econet(void)
+esp_err_t config_save_econet(const cJSON *settings)
 {
-    return _save_config("econet", &config_econet, sizeof(config_econet));
+    FILE *fp = fopen("/user/econet_cfg.tmp", "w");
+    if (!fp)
+    {
+        ESP_LOGW(TAG, "Could not open temp file for writing");
+        return ESP_OK;
+    }
+
+    esp_err_t res = ESP_FAIL;
+    char *json_str = cJSON_PrintUnformatted(settings);
+    if (json_str != NULL)
+    {
+        fputs(json_str, fp);
+        free(json_str);
+        fclose(fp);
+        rename("/user/econet_cfg.tmp", ECONET_CONFIG_FILE);
+        res = ESP_OK;
+    }
+
+    return res;
 }
 
-esp_err_t config_load_econet(void)
+cJSON *config_load_econet_json(void)
 {
-    esp_err_t err = _load_config("econet", &config_econet, sizeof(config_econet));
-    if (err != ESP_OK)
+    FILE *fp = fopen(ECONET_CONFIG_FILE, "r");
+    if (!fp)
     {
-        ESP_LOGW(TAG, "Using default Econet configuration");
-        memset(&config_econet, 0, sizeof(config_econet));
-        config_econet.this_station_id = 254;
-        config_econet.remote_station_id = 127;
-        strcpy(config_econet.server_address, "192.168.4.2");
-        config_econet.server_port = 32768;
+        ESP_LOGW(TAG, "Could not Econet config file");
+        return NULL;
     }
+
+    // Get file size
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    // Read file into buffer
+    char *buffer = malloc(size + 1);
+    if (buffer == NULL)
+    {
+        fclose(fp);
+        ESP_LOGE(TAG, "Could not allocate buffer for file");
+        return NULL;
+    }
+    fread(buffer, 1, size, fp);
+    buffer[size] = '\0';
+    fclose(fp);
+
+    cJSON *root = cJSON_Parse(buffer);
+    free(buffer);
+
+    return root;
+}
+
+esp_err_t config_load_econet(config_cb_econet_station eco_cb, config_cb_aun_station aun_cb)
+{
+    FILE *fp = fopen(ECONET_CONFIG_FILE, "r");
+    if (!fp)
+    {
+        ESP_LOGW(TAG, "Could not Econet config file");
+        return ESP_OK;
+    }
+
+    // Get file size
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    // Read file into buffer
+    char *buffer = malloc(size + 1);
+    if (buffer == NULL)
+    {
+        fclose(fp);
+        ESP_LOGE(TAG, "Could not allocate buffer for file");
+        return ESP_ERR_NO_MEM;
+    }
+    fread(buffer, 1, size, fp);
+    buffer[size] = '\0';
+    fclose(fp);
+
+    cJSON *root = cJSON_Parse(buffer);
+    free(buffer);
+
+    // Configure Econet stations
+    cJSON *cfgs = cJSON_GetObjectItemCaseSensitive(root, "econetStations");
+    if (cfgs)
+    {
+        for (cJSON *item = cfgs->child; item != NULL; item = item->next)
+        {
+
+            cJSON *station_id = cJSON_GetObjectItem(item, "station_id");
+            cJSON *udp_port = cJSON_GetObjectItem(item, "udp_port");
+
+            bool is_ok = cJSON_IsNumber(station_id) &&
+                         cJSON_IsNumber(udp_port);
+
+            if (is_ok && station_id->valueint && udp_port->valueint)
+            {
+                config_econet_station_t cfg = {
+                    .station_id = station_id->valueint,
+                    .network_id = 0,
+                    .local_udp_port = udp_port->valueint};
+                eco_cb(&cfg);
+            }
+        }
+    }
+
+    cfgs = cJSON_GetObjectItemCaseSensitive(root, "aunStations");
+    if (cfgs)
+    {
+        for (cJSON *item = cfgs->child; item != NULL; item = item->next)
+        {
+
+            cJSON *station_id = cJSON_GetObjectItem(item, "station_id");
+            cJSON *udp_port = cJSON_GetObjectItem(item, "udp_port");
+            cJSON *remote_ip = cJSON_GetObjectItem(item, "remote_ip");
+
+            bool is_ok = cJSON_IsNumber(station_id) &&
+                         cJSON_IsNumber(udp_port) &&
+                         cJSON_IsString(remote_ip);
+
+            if (is_ok && station_id->valueint && udp_port->valueint)
+            {
+                config_aun_station_t cfg = {
+                    .station_id = station_id->valueint,
+                    .network_id = 0,
+                    .udp_port = udp_port->valueint};
+                snprintf(cfg.remote_address, sizeof(cfg.remote_address), "%s", remote_ip->valuestring);
+                aun_cb(&cfg);
+            }
+        }
+    }
+
+    cJSON_Delete(root);
+
     return ESP_OK;
 }
 
@@ -92,6 +212,4 @@ void config_init(void)
     }
 
     config_load_wifi();
-    config_load_econet();
-
 }

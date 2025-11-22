@@ -32,6 +32,31 @@ static uint32_t is_frame_active;
 static uint8_t rx_bytes[2048];
 static uint16_t rx_frame_len;
 static uint16_t rx_crc;
+static DRAM_ATTR bool rx_is_send_shutdown;
+portMUX_TYPE econet_rx_interrupt_lock = portMUX_INITIALIZER_UNLOCKED;
+
+typedef struct
+{
+    uint32_t w[8];
+} bitmap256_t;
+
+// These bitmaps determine which stations or networks we answer for on the Econet
+static DRAM_ATTR bitmap256_t rx_station_bitmap;
+static DRAM_ATTR bitmap256_t rx_network_bitmap;
+
+static inline bool bm256_test(const bitmap256_t *bm, uint8_t bit)
+{
+    uint32_t word = bit >> 5;
+    uint32_t offset = bit & 31;
+    return (bm->w[word] >> offset) & 1u;
+}
+
+static inline void bm256_set(bitmap256_t *bm, uint8_t bit)
+{
+    uint32_t word = bit >> 5;
+    uint32_t offset = bit & 31;
+    bm->w[word] |= (1u << offset);
+}
 
 static inline void IRAM_ATTR _begin_frame(void)
 {
@@ -61,7 +86,7 @@ static inline void IRAM_ATTR _complete_frame()
     econet_stats.rx_frame_count++;
 
     // Is this for us?
-    if (rx_bytes[0] == econet_station_id && rx_bytes[1] == 0x00)
+    if ((bm256_test(&rx_station_bitmap, rx_bytes[0]) && rx_bytes[1] == 0x00) || bm256_test(&rx_network_bitmap, rx_bytes[1]))
     {
 
         uint32_t data_len = rx_frame_len - 2;
@@ -71,10 +96,10 @@ static inline void IRAM_ATTR _complete_frame()
         if (data_len > 4)
         {
             uint8_t ack_frame[4] = {rx_bytes[2], rx_bytes[3], rx_bytes[0], rx_bytes[1]};
-            portENTER_CRITICAL_ISR(&tx_frame_buffer_lock);
+            portENTER_CRITICAL_ISR(&econet_rx_interrupt_lock);
             xMessageBufferSend(tx_frame_buffer, ack_frame, sizeof(ack_frame), 0);
-            portEXIT_CRITICAL_ISR(&tx_frame_buffer_lock);
             xMessageBufferSend(econet_rx_frame_buffer, rx_bytes, data_len, 0);
+            portEXIT_CRITICAL_ISR(&econet_rx_interrupt_lock);
         }
         else
         {
@@ -226,4 +251,20 @@ void econet_rx_start(void)
             .partial_rx_en = true,
         }};
     ESP_ERROR_CHECK(parlio_rx_unit_receive(rx_unit, rx_payload_dma_buffer, sizeof(rx_payload_dma_buffer), &rx_cfg));
+}
+
+void econet_rx_clear_bitmaps(void)
+{
+    memset(&rx_station_bitmap, 0, sizeof(rx_station_bitmap));
+    memset(&rx_network_bitmap, 0, sizeof(rx_network_bitmap));
+}
+
+void exonet_rx_enable_station(uint8_t station_id)
+{
+    bm256_set(&rx_station_bitmap, station_id);
+}
+
+void exonet_rx_enable_network(uint8_t network_id)
+{
+    bm256_set(&rx_network_bitmap, network_id);
 }

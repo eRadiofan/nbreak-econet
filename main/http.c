@@ -20,7 +20,7 @@ static const char *TAG = "httpd";
 static esp_err_t _file_handler(httpd_req_t *req)
 {
     char filepath[256];
-    const char *base_path = "/fs/web";
+    const char *base_path = "/app/web";
 
     snprintf(filepath, sizeof(filepath), "%s%s", base_path, req->uri);
 

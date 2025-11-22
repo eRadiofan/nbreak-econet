@@ -34,7 +34,6 @@ static uint8_t tx_write_one_count;
 
 TaskHandle_t tx_task = NULL;
 MessageBufferHandle_t tx_frame_buffer;
-portMUX_TYPE tx_frame_buffer_lock = portMUX_INITIALIZER_UNLOCKED;
 
 static inline uint16_t IRAM_ATTR crc16_x25(const uint8_t *data, size_t len)
 {
@@ -221,9 +220,9 @@ bool econet_send(const uint8_t *data, uint16_t length)
 {
     tx_sender_task = xTaskGetCurrentTaskHandle();
 
-    portENTER_CRITICAL(&tx_frame_buffer_lock);
-    xMessageBufferSend(tx_frame_buffer, data, length, portMAX_DELAY);
-    portEXIT_CRITICAL(&tx_frame_buffer_lock);
+    portENTER_CRITICAL(&econet_rx_interrupt_lock);
+    xMessageBufferSend(tx_frame_buffer, data, length, 0);
+    portEXIT_CRITICAL(&econet_rx_interrupt_lock);
 
     ulTaskNotifyTake(pdTRUE, -1); // Wait for send completion (Full 4-way ACK or NACK)
 

@@ -45,3 +45,4 @@ extern aunbridge_stats_t aunbridge_stats;
 
 void aunbrige_on_econet_frame_rx(uint8_t *data, uint16_t length, void *user_ctx);
 void aunbrige_start(void);
+void aunbridge_reconfigure(void);

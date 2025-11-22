@@ -57,18 +57,20 @@ typedef struct
 
 extern econet_stats_t econet_stats;
 extern MessageBufferHandle_t econet_rx_frame_buffer;
-extern uint8_t econet_station_id;
 
 void econet_setup(const econet_config_t *config);
 void econet_start(void);
 bool econet_send(const uint8_t *data, uint16_t length);
-void econet_reconfigure(void);
+void econet_rx_clear_bitmaps(void);
+void exonet_rx_enable_station(uint8_t station_id);
+void exonet_rx_enable_network(uint8_t network_id);
+void econet_rx_shutdown(void);
 
 #ifdef ECONET_PRIVATE_API
 #define TAG "ECONET"
 extern econet_config_t econet_cfg;
 extern MessageBufferHandle_t tx_frame_buffer;
-extern portMUX_TYPE tx_frame_buffer_lock;
+extern portMUX_TYPE econet_rx_interrupt_lock;
 extern TaskHandle_t tx_task;
 void econet_rx_setup(void);
 void econet_rx_start(void);

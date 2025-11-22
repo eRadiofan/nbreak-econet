@@ -59,9 +59,22 @@ After flashing, the device will start a Wi-Fi access point named nbreak-econet.
 
 1. Connect to the access point.
 
-2. Open a browser and go to http://192.168.4.1
+2. Open a browser and go to http://192.168.4.1. You can select the menu items on the left.
 
-![Hardware schematic](docs/WebInterface.png)
+![Web interface stats page](docs/WebInterface.png)
+
+3. After connecting WiFi and verifying you have access, you can configure the Econet/AUN settings.
+
+The example screenshot below is for a BBC Micro whose station ID is 127 and a fileserver at 192.168.0.1.
+
+![Web interface econet config](docs/EconetCfg.png)
+
+The first table, the Econet Stations list, should specify the station numbers on your Econet that you intend to expose to the IP network. N-Break will monitor the designated port for traffic addressed to these stations. Currently you can have a maximum of 5. Additional entries
+will not be loaded.
+
+The second table defines the AUN IP hosts that you want to present to the Econet network. N-Break will listen on the Econet for these station IDs and respond on their behalf, forwarding the traffic to the specified IP address and port.
+
+For communications to be successful, you need at least one entry in both tables. 
 
 ## AUN Fileserver Setup
 

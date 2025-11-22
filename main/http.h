@@ -26,4 +26,3 @@ esp_err_t http_ws_handler(httpd_req_t *req);
 void http_ws_close_handler(httpd_handle_t hd, int sockfd);
 void http_ws_init(void);
 extern httpd_handle_t http_server;
-

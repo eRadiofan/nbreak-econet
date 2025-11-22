@@ -108,7 +108,7 @@
   <div class="space-y-2 text-sm opacity-{formDisabled ? 50 : 100}">
     <EditableTable
       columns={ecsColumns}
-      rows={econetSettings.econetStations}
+      rows={econetSettings?.econetStations || []}
       onChange={ecsOnChange}
     />
 
@@ -137,7 +137,7 @@
   <div class="space-y-2 text-sm opacity-{formDisabled ? 50 : 100}">
     <EditableTable
       columns={aunColumns}
-      rows={econetSettings.aunStations}
+      rows={econetSettings.aunStations || []}
       onChange={aunOnChange}
     />
 

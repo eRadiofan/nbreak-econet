@@ -11,7 +11,7 @@
  */
 
 #include "config.h"
-#include "econet.h"
+#include "aun_bridge.h"
 #include "cJSON.h"
 #include "lwip/sockets.h"
 #include "nvs_flash.h"
@@ -78,25 +78,9 @@ static esp_err_t _ws_save_econet(int request_id, const cJSON *payload, int fd)
         return ESP_FAIL;
     }
 
-    const cJSON *remote_station_id = cJSON_GetObjectItemCaseSensitive(settings, "remote_station_id");
-    const cJSON *this_station_id = cJSON_GetObjectItemCaseSensitive(settings, "this_station_id");
-    const cJSON *server_ip = cJSON_GetObjectItemCaseSensitive(settings, "server_ip");
-    const cJSON *server_port = cJSON_GetObjectItemCaseSensitive(settings, "server_port");
+    config_save_econet(settings);
 
-    config_econet.remote_station_id = remote_station_id->valueint;
-    config_econet.this_station_id = this_station_id->valueint;
-    if (cJSON_IsString(server_ip))
-    {
-        snprintf((char *)config_econet.server_address,
-                 sizeof(config_econet.server_address),
-                 "%s",
-                 server_ip->valuestring);
-    }
-    config_econet.server_port = server_port->valueint;
-
-    config_save_econet();
-
-    econet_reconfigure();
+    aunbridge_reconfigure();
 
     return send_ok_response(request_id, fd);
 }
@@ -108,16 +92,13 @@ static esp_err_t _ws_get_econet(int request_id, const cJSON *payload, int fd)
     cJSON_AddNumberToObject(root, "id", request_id);
     cJSON_AddBoolToObject(root, "ok", cJSON_True);
 
-    cJSON *settings = cJSON_AddObjectToObject(root, "settings");
-    cJSON_AddNumberToObject(settings, "remote_station_id",
-                            config_econet.remote_station_id);
-    cJSON_AddNumberToObject(settings, "this_station_id",
-                            config_econet.this_station_id);
-    cJSON_AddStringToObject(settings, "server_ip", config_econet.server_address);
-    cJSON_AddNumberToObject(settings, "server_port",
-                            config_econet.server_port);
+    cJSON *settings = config_load_econet_json();
+    if (settings)
+    {
+        cJSON_AddItemToObject(root, "settings", settings);
+    }
 
-    char* response = cJSON_PrintUnformatted(root);
+    char *response = cJSON_PrintUnformatted(root);
     esp_err_t err = http_ws_send(fd, response);
 
     free(response);

@@ -9,6 +9,9 @@ flash:
 monflash:
 	idf.py flash monitor -p ${SERIALPORT}
 
+monitor:
+	idf.py monitor -p ${SERIALPORT}
+
 menuconfig:
 	idf.py menuconfig
 

@@ -13,6 +13,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include "cJSON.h"
 #include "esp_wifi.h"
 
 typedef struct
@@ -26,15 +27,26 @@ extern config_wifi_t config_wifi;
 
 typedef struct
 {
-    uint8_t remote_station_id;
-    uint8_t this_station_id;
-    char server_address[128];
-    uint16_t server_port;
-} config_econet_t;
-extern config_econet_t config_econet;
+    uint8_t station_id;
+    uint8_t network_id;
+    uint16_t local_udp_port;
+} config_econet_station_t;
+
+typedef struct
+{
+    char remote_address[64];
+    uint8_t station_id;
+    uint8_t network_id;
+    uint16_t udp_port;
+} config_aun_station_t;
+
+typedef esp_err_t (*config_cb_econet_station)(config_econet_station_t *cfg);
+typedef esp_err_t (*config_cb_aun_station)(config_aun_station_t *cfg);
 
 void config_init(void);
 esp_err_t config_save_wifi(void);
 esp_err_t config_load_wifi(void);
-esp_err_t config_save_econet(void);
-esp_err_t config_load_econet(void);
+
+cJSON *config_load_econet_json(void);
+esp_err_t config_save_econet(const cJSON *settings);
+esp_err_t config_load_econet(config_cb_econet_station eco_cb, config_cb_aun_station aun_cb);

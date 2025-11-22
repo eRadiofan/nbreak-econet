@@ -20,7 +20,6 @@
 
 econet_config_t econet_cfg;
 econet_stats_t econet_stats;
-uint8_t DRAM_ATTR econet_station_id = 254;
 
 void econet_clock_setup(void)
 {
@@ -83,13 +82,16 @@ void econet_setup(const econet_config_t *config)
 void econet_start(void)
 {
     ESP_LOGI(TAG, "Starting ADLC transciever");
-    econet_reconfigure();
     econet_clock_start();
     econet_rx_start();
     econet_tx_start();
 }
 
-void econet_reconfigure(void)
+void econet_rx_shutdown(void)
 {
-    econet_station_id = config_econet.this_station_id;
+    char tmp = 0;
+    econet_rx_clear_bitmaps();
+    portENTER_CRITICAL(&econet_rx_interrupt_lock);
+    xMessageBufferSend(econet_rx_frame_buffer, &tmp, sizeof(tmp), 0);
+    portEXIT_CRITICAL(&econet_rx_interrupt_lock);
 }

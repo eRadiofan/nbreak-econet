@@ -58,8 +58,8 @@ export interface AUNRow {
 };
 
 export type EconetSettings = {
-  econetStations: ECSRow[];
-  aunStations: AUNRow[];
+  econetStations?: ECSRow[];
+  aunStations?: AUNRow[];
 };
 
 

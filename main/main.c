@@ -35,16 +35,27 @@
 #define CLK_OE_PIN 4
 #define CLK_FREQ_HZ 100000
 
-void init_fs(void) {
-    esp_vfs_littlefs_conf_t conf = {
-        .base_path = "/fs",
-        .partition_label = "storage",
-        .format_if_mount_failed = true,
-        .dont_mount = false,
-    };
-    ESP_ERROR_CHECK(esp_vfs_littlefs_register(&conf));
+void init_fs(void)
+{
+    {
+        esp_vfs_littlefs_conf_t conf = {
+            .base_path = "/app",
+            .partition_label = "rootfs",
+            .format_if_mount_failed = true,
+            .dont_mount = false,
+        };
+        ESP_ERROR_CHECK(esp_vfs_littlefs_register(&conf));
+    }
 
-    
+    {
+        esp_vfs_littlefs_conf_t conf = {
+            .base_path = "/user",
+            .partition_label = "user",
+            .format_if_mount_failed = true,
+            .dont_mount = false,
+        };
+        ESP_ERROR_CHECK(esp_vfs_littlefs_register(&conf));
+    }
 }
 
 void print_task_list(void)
@@ -90,70 +101,72 @@ void app_main(void)
     aunbrige_start();
 
     static char buf[512];
-    for (int i=0;;i++)
+    for (int i = 0;; i++)
     {
         vTaskDelay(1000 / portTICK_PERIOD_MS);
 
-        if ((i%10)==0) {
+        if ((i % 10) == 0)
+        {
             print_task_list();
         }
-        
+
         aunbridge_stats_t aun = aunbridge_stats;
         econet_stats_t eco = econet_stats;
 
         int len = snprintf(buf, sizeof(buf),
-            "{"
-                "\"type\":\"stats_stream\","
-                "\"aunbridge_stats\":{"
-                    "\"tx_count\":%lu,"
-                    "\"tx_retry_count\":%lu,"
-                    "\"tx_abort_count\":%lu,"
-                    "\"tx_error_count\":%lu,"
-                    "\"tx_ack_count\":%lu,"
-                    "\"tx_nack_count\":%lu,"
-                    "\"rx_data_count\":%lu,"
-                    "\"rx_ack_count\":%lu,"
-                    "\"rx_nack_count\":%lu,"
-                    "\"rx_unknown_count\":%lu"
-                "},"
-                "\"econet_stats\":{"
-                    "\"rx_frame_count\":%lu,"
-                    "\"rx_crc_fail_count\":%lu,"
-                    "\"rx_short_frame_count\":%lu,"
-                    "\"rx_abort_count\":%lu,"
-                    "\"rx_oversize_count\":%lu,"
-                    "\"rx_ack_count\":%lu,"
-                    "\"rx_nack_count\":%lu,"
-                    "\"tx_frame_count\":%lu,"
-                    "\"tx_ack_count\":%lu"
-                "}"
-            "}",
-            aun.tx_count,
-            aun.tx_retry_count,
-            aun.tx_abort_count,
-            aun.tx_error_count,
-            aun.tx_ack_count,
-            aun.tx_nack_count,
-            aun.rx_data_count,
-            aun.rx_ack_count,
-            aun.rx_nack_count,
-            aun.rx_unknown_count,
-            eco.rx_frame_count,
-            eco.rx_crc_fail_count,
-            eco.rx_short_frame_count,
-            eco.rx_abort_count,
-            eco.rx_oversize_count,
-            eco.rx_ack_count,
-            eco.rx_nack_count,
-            eco.tx_frame_count,
-            eco.tx_ack_count
-        );
+                           "{"
+                           "\"type\":\"stats_stream\","
+                           "\"aunbridge_stats\":{"
+                           "\"tx_count\":%lu,"
+                           "\"tx_retry_count\":%lu,"
+                           "\"tx_abort_count\":%lu,"
+                           "\"tx_error_count\":%lu,"
+                           "\"tx_ack_count\":%lu,"
+                           "\"tx_nack_count\":%lu,"
+                           "\"rx_data_count\":%lu,"
+                           "\"rx_ack_count\":%lu,"
+                           "\"rx_nack_count\":%lu,"
+                           "\"rx_unknown_count\":%lu"
+                           "},"
+                           "\"econet_stats\":{"
+                           "\"rx_frame_count\":%lu,"
+                           "\"rx_crc_fail_count\":%lu,"
+                           "\"rx_short_frame_count\":%lu,"
+                           "\"rx_abort_count\":%lu,"
+                           "\"rx_oversize_count\":%lu,"
+                           "\"rx_ack_count\":%lu,"
+                           "\"rx_nack_count\":%lu,"
+                           "\"tx_frame_count\":%lu,"
+                           "\"tx_ack_count\":%lu"
+                           "}"
+                           "}",
+                           aun.tx_count,
+                           aun.tx_retry_count,
+                           aun.tx_abort_count,
+                           aun.tx_error_count,
+                           aun.tx_ack_count,
+                           aun.tx_nack_count,
+                           aun.rx_data_count,
+                           aun.rx_ack_count,
+                           aun.rx_nack_count,
+                           aun.rx_unknown_count,
+                           eco.rx_frame_count,
+                           eco.rx_crc_fail_count,
+                           eco.rx_short_frame_count,
+                           eco.rx_abort_count,
+                           eco.rx_oversize_count,
+                           eco.rx_ack_count,
+                           eco.rx_nack_count,
+                           eco.tx_frame_count,
+                           eco.tx_ack_count);
 
-        if (len > 0 && len < (int)sizeof(buf)) {
+        if (len > 0 && len < (int)sizeof(buf))
+        {
             http_ws_broadcast_json(buf);
-        } else {
+        }
+        else
+        {
             ESP_LOGW("ws", "JSON too long or error building JSON");
         }
-
     }
 }

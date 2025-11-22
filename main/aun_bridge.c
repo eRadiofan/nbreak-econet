@@ -10,6 +10,7 @@
  * See the LICENSE file in the project root for full license information.
  */
 
+#include <stdint.h>
 #include "lwip/sockets.h"
 #include "lwip/netdb.h"
 #include "esp_log.h"
@@ -18,17 +19,77 @@
 #include "econet.h"
 #include "aun_bridge.h"
 
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
+
 aunbridge_stats_t aunbridge_stats;
 
 static const char *TAG = "AUN";
-
+static bool is_running;
+static volatile TaskHandle_t shutdown_notify_handle;
 static QueueHandle_t ack_queue;
-static int aun_sock;
+static int rx_udp_ctl_pipe[2];
+
+typedef struct
+{
+    uint8_t station_id;
+    uint8_t network_id;
+    uint16_t local_udp_port;
+    int socket;
+    bool is_open;
+} econet_station_t;
+static econet_station_t econet_stations[5];
+
+typedef struct
+{
+    char remote_address[64];
+    uint8_t station_id;
+    uint8_t network_id;
+    uint16_t udp_port;
+    uint32_t last_acked_seq;
+    bool last_acq_result;
+} aun_station_t;
+static aun_station_t aun_stations[20];
+
+static econet_station_t *_get_econet_station_by_id(uint8_t station_id)
+{
+    for (int i = 0; i < ARRAY_SIZE(econet_stations); i++)
+    {
+        if (econet_stations[i].station_id == station_id)
+        {
+            return &econet_stations[i];
+        }
+    }
+    return NULL;
+}
+
+static aun_station_t *_get_aun_station_by_id(uint8_t station_id)
+{
+    for (int i = 0; i < ARRAY_SIZE(aun_stations); i++)
+    {
+        if (aun_stations[i].station_id == station_id)
+        {
+            return &aun_stations[i];
+        }
+    }
+    return NULL;
+}
+
+static aun_station_t *_get_aun_station_by_port(uint16_t udp_port)
+{
+    for (int i = 0; i < ARRAY_SIZE(aun_stations); i++)
+    {
+        if (aun_stations[i].udp_port == udp_port)
+        {
+            return &aun_stations[i];
+        }
+    }
+    return NULL;
+}
 
 static void _aun_econet_rx_task(void *params)
 {
     static uint32_t rx_seq;
-    static uint8_t econet_packet[2048]; //TODO: Don't need two buffers for this!
+    static uint8_t econet_packet[2048]; // TODO: Don't need two buffers for this!
     static uint8_t aun_packet[2048];
     econet_hdr_t scout;
     econet_hdr_t *econet_hdr = (econet_hdr_t *)econet_packet;
@@ -38,6 +99,13 @@ static void _aun_econet_rx_task(void *params)
 
         // Get scout
         size_t length = xMessageBufferReceive(econet_rx_frame_buffer, econet_packet, sizeof(econet_packet), portMAX_DELAY);
+        if (length == 1)
+        {
+            econet_rx_clear_bitmaps();
+            ESP_LOGI(TAG, "Econet RX shutdown");
+            xTaskNotifyGive(shutdown_notify_handle);
+            vTaskDelete(NULL);
+        }
 
         // Store scout frame info
         if (length != 6)
@@ -65,10 +133,25 @@ static void _aun_econet_rx_task(void *params)
                  econet_hdr->src_stn, econet_hdr->src_net,
                  econet_hdr->dst_stn, econet_hdr->dst_net);
 
+        econet_station_t *econet_station = _get_econet_station_by_id(econet_hdr->src_stn);
+        if (econet_station == NULL)
+        {
+            // FUTURE: Dynamically make a socket for it...
+            ESP_LOGW(TAG, "Econet station %d is not configured. Not forwarding packet.", econet_hdr->src_stn);
+            continue;
+        }
+
+        aun_station_t *aun_station = _get_aun_station_by_id(econet_hdr->dst_stn);
+        if (aun_station == NULL)
+        {
+            ESP_LOGE(TAG, "AUN station %d is not configured but we accepted a packet for it!", econet_hdr->dst_stn);
+            continue;
+        }
+
         struct sockaddr_in dest_addr;
-        dest_addr.sin_addr.s_addr = inet_addr(config_econet.server_address);
+        dest_addr.sin_addr.s_addr = inet_addr(aun_station->remote_address);
         dest_addr.sin_family = AF_INET;
-        dest_addr.sin_port = htons(config_econet.server_port);
+        dest_addr.sin_port = htons(aun_station->udp_port);
 
         aunbridge_stats.tx_count++;
 
@@ -88,7 +171,7 @@ static void _aun_econet_rx_task(void *params)
             aun_packet[7] = (rx_seq >> 24) & 0xFF;
             memcpy(&aun_packet[8], econet_packet + 4, length - 4);
 
-            int err = sendto(aun_sock, aun_packet, length + 8 - 4, 0,
+            int err = sendto(econet_station->socket, aun_packet, length + 8 - 4, 0,
                              (struct sockaddr *)&dest_addr, sizeof(dest_addr));
             if (err < 0)
             {
@@ -120,118 +203,289 @@ static void _aun_econet_rx_task(void *params)
 
         if (retries == 0)
         {
-            ESP_LOGW(TAG, "Retries exhausted, no response from server.");
+            ESP_LOGW(TAG, "Retries exhausted, no response from server %s:%d", inet_ntoa(dest_addr.sin_addr), ntohs(dest_addr.sin_port));
             aunbridge_stats.tx_abort_count++;
         }
-
     }
+}
+
+static void _aun_udp_rx_process(econet_station_t *econet_station)
+{
+    static uint8_t aun_rx_buffer[1500];
+    struct sockaddr_in source_addr;
+    socklen_t socklen = sizeof(source_addr);
+    int len = recvfrom(econet_station->socket, aun_rx_buffer, sizeof(aun_rx_buffer), 0,
+                       (struct sockaddr *)&source_addr, &socklen);
+    if (len < 0)
+    {
+        ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
+        return;
+    }
+
+    switch (aun_rx_buffer[0])
+    {
+    case AUN_TYPE_DATA:
+        aunbridge_stats.rx_data_count++;
+        break;
+    case AUN_TYPE_ACK:
+        aunbridge_stats.rx_ack_count++;
+        xQueueSend(ack_queue, aun_rx_buffer, 0);
+        return;
+    case AUN_TYPE_NACK:
+        aunbridge_stats.rx_nack_count++;
+        xQueueSend(ack_queue, aun_rx_buffer, 0);
+        return;
+    default:
+        ESP_LOGW(TAG, "Received packet of unknown type 0x%02x", aun_rx_buffer[0]);
+        aunbridge_stats.rx_unknown_count++;
+        return;
+    }
+
+    // Look up sending AUN station
+    aun_station_t *aun_station = _get_aun_station_by_port(ntohs(source_addr.sin_port));
+    if (aun_station == NULL)
+    {
+        ESP_LOGW(TAG, "Received packet but can't identify station ID");
+        return;
+    }
+
+    aun_hdr_t hdr;
+    memcpy(&hdr, aun_rx_buffer, sizeof(hdr));
+    uint32_t ack_seq =
+        hdr.sequence[0] |
+        (hdr.sequence[1] << 8) |
+        (hdr.sequence[2] << 16) |
+        (hdr.sequence[3] << 24);
+
+    // Change AUN header to Econet style
+    aun_rx_buffer[2] = econet_station->station_id;
+    aun_rx_buffer[3] = 0x00;
+    aun_rx_buffer[4] = aun_station->station_id;
+    aun_rx_buffer[5] = 0x00;
+    aun_rx_buffer[6] = hdr.econet_control | 0x80;
+    aun_rx_buffer[7] = hdr.econet_port;
+
+    // Send to Beeb (but only if we didn't get acknowledgement before for this packet.)
+    // NOTE: We're not encountering out of order but if we do then we'll need a different strategy to reorder them.
+    if (ack_seq != aun_station->last_acked_seq || !aun_station->last_acq_result)
+    {
+        ESP_LOGI(TAG, "[%05d] Sending %d byte frame from %s to Econet %d.%d",
+                 ack_seq, len, inet_ntoa(source_addr.sin_addr), aun_rx_buffer[2], aun_rx_buffer[3]);
+        aun_station->last_acq_result = econet_send(&aun_rx_buffer[2], len - 2);
+        aun_station->last_acked_seq = ack_seq;
+    }
+    else
+    {
+        ESP_LOGI(TAG, "[%05d] Re-acknowledging duplicate (ack=%d)", ack_seq, aun_station->last_acq_result);
+    }
+
+    // Send AUN ack/nack
+    if (aun_station->last_acq_result)
+    {
+        hdr.transaction_type = AUN_TYPE_ACK;
+        aunbridge_stats.tx_ack_count++;
+    }
+    else
+    {
+        hdr.transaction_type = AUN_TYPE_NACK;
+        aunbridge_stats.tx_nack_count++;
+    }
+
+    // Send (N)ACK to calling station at port we have on file
+    struct sockaddr_in dest_addr;
+    dest_addr.sin_addr.s_addr = inet_addr(aun_station->remote_address);
+    dest_addr.sin_family = AF_INET;
+    dest_addr.sin_port = htons(aun_station->udp_port);
+    memcpy(aun_rx_buffer, &hdr, sizeof(hdr));
+    sendto(econet_station->socket, aun_rx_buffer, 8, 0,
+           (struct sockaddr *)&dest_addr, sizeof(dest_addr));
 }
 
 static void _aun_udp_rx_task(void *params)
 {
-    static uint8_t aun_rx_buffer[1500];
-  
+
     ESP_LOGI(TAG, "Waiting for data...");
 
-    uint32_t last_acked_seq = UINT32_MAX;
-    bool last_acq_result = false;
     for (;;)
     {
-        struct sockaddr_in source_addr;
-        socklen_t socklen = sizeof(source_addr);
-        int len = recvfrom(aun_sock, aun_rx_buffer, sizeof(aun_rx_buffer), 0,
-                           (struct sockaddr *)&source_addr, &socklen);
-
-        if (len < 0)
+        fd_set rfds;
+        FD_ZERO(&rfds);
+        FD_SET(rx_udp_ctl_pipe[0], &rfds);
+        int max_fd = rx_udp_ctl_pipe[0];
+        for (int i = 0; i < ARRAY_SIZE(econet_stations); i++)
         {
-            ESP_LOGE(TAG, "recvfrom failed: errno %d", errno);
-            continue;
+            if (econet_stations[i].is_open)
+            {
+                FD_SET(econet_stations[i].socket, &rfds);
+                if (econet_stations[i].socket > max_fd)
+                {
+                    max_fd = econet_stations[i].socket;
+                }
+            }
         }
 
-        switch (aun_rx_buffer[0])
+        int err = select(max_fd + 1, &rfds, NULL, NULL, NULL);
+        if (err < 0)
         {
-        case AUN_TYPE_DATA:
-            aunbridge_stats.rx_data_count++;
-            break;
-        case AUN_TYPE_ACK:
-             aunbridge_stats.rx_ack_count++;
-             xQueueSend(ack_queue, aun_rx_buffer, 0);
-             continue;
-        case AUN_TYPE_NACK:
-            aunbridge_stats.rx_nack_count++;
-            xQueueSend(ack_queue, aun_rx_buffer, 0);
-            continue;
-        default:
-            ESP_LOGW(TAG, "Received packet of unknown type 0x%02x", aun_rx_buffer[0]);
-            aunbridge_stats.rx_unknown_count++;
+            ESP_LOGE(TAG, "select error: errno %d", errno);
             continue;
         }
 
-        aun_hdr_t hdr;
-        memcpy(&hdr, aun_rx_buffer, sizeof(hdr));
-        uint32_t ack_seq =
-            hdr.sequence[0] |
-            (hdr.sequence[1] << 8) |
-            (hdr.sequence[2] << 16) |
-            (hdr.sequence[3] << 24);
-
-        // Change AUN header to Econet style
-        aun_rx_buffer[2] = config_econet.remote_station_id;
-        aun_rx_buffer[3] = 0x00;
-        aun_rx_buffer[4] = config_econet.this_station_id;
-        aun_rx_buffer[5] = 0x00;
-        aun_rx_buffer[6] = hdr.econet_control | 0x80;
-        aun_rx_buffer[7] = hdr.econet_port;
-
-        // Send to Beeb (but only if we didn't already because sometimes we get packets more than once.)
-        // NOTE: We're not encountering out of order but if we do then we'll need a different strategy to reorder them.
-        if (ack_seq != last_acked_seq) {
-            ESP_LOGI(TAG, "[%05d] Sending %d byte frame from %s to Econet %d.%d", 
-                ack_seq, len, inet_ntoa(source_addr.sin_addr), aun_rx_buffer[2], aun_rx_buffer[3]);
-            last_acq_result = econet_send(&aun_rx_buffer[2], len - 2);
-            last_acked_seq = ack_seq;
-        } else {
-            ESP_LOGI(TAG, "[%05d] Re-acknowledging duplicate", ack_seq);
+        if (FD_ISSET(rx_udp_ctl_pipe[0], &rfds))
+        {
+            ESP_LOGI(TAG, "AUN RX shutdown");
+            char tmp[1];
+            read(rx_udp_ctl_pipe[0], &tmp, sizeof(tmp));
+            xTaskNotifyGive(shutdown_notify_handle);
+            vTaskDelete(NULL);
+            continue;
         }
-        
-        // Send AUN ack/nack
-        if (last_acq_result) {
-            hdr.transaction_type = AUN_TYPE_ACK;
-            aunbridge_stats.tx_ack_count++;
-        } else {
-            hdr.transaction_type = AUN_TYPE_NACK;
-            aunbridge_stats.tx_nack_count++;
+
+        for (int i = 0; i < ARRAY_SIZE(econet_stations); i++)
+        {
+            if (FD_ISSET(econet_stations[i].socket, &rfds))
+            {
+                _aun_udp_rx_process(&econet_stations[i]);
+            }
         }
-        memcpy(aun_rx_buffer, &hdr, sizeof(hdr));
-        sendto(aun_sock, aun_rx_buffer, 8, 0,
-               (struct sockaddr *)&source_addr, sizeof(source_addr));
     }
+}
+
+static esp_err_t _alloc_aun_station(config_aun_station_t *cfg)
+{
+    aun_station_t *station = NULL;
+    for (int i = 0; i < ARRAY_SIZE(aun_stations); i++)
+    {
+        if (aun_stations[i].station_id == 0)
+        {
+            station = &aun_stations[i];
+            break;
+        }
+    }
+    if (station == NULL)
+    {
+        ESP_LOGE(TAG, "No free AUN station slots.");
+        return ESP_FAIL;
+    }
+
+    snprintf(station->remote_address, sizeof(station->remote_address), "%s", cfg->remote_address);
+    station->station_id = cfg->station_id;
+    station->network_id = cfg->network_id;
+    station->udp_port = cfg->udp_port;
+    station->last_acked_seq = UINT32_MAX;
+    station->last_acq_result = false;
+    return ESP_OK;
+}
+
+static esp_err_t _open_econet_station(config_econet_station_t *cfg)
+{
+    econet_station_t *station = NULL;
+    for (int i = 0; i < ARRAY_SIZE(econet_stations); i++)
+    {
+        if (!econet_stations[i].is_open)
+        {
+            station = &econet_stations[i];
+            break;
+        }
+    }
+    if (station == NULL)
+    {
+        ESP_LOGE(TAG, "Failed to add station %d. No free slots.", cfg->station_id);
+        return ESP_FAIL;
+    }
+
+    struct sockaddr_in listen_addr = {
+        .sin_addr.s_addr = htonl(INADDR_ANY),
+        .sin_family = AF_INET,
+        .sin_port = htons(cfg->local_udp_port),
+    };
+
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (sock < 0)
+    {
+        ESP_LOGE(TAG, "Failed to add station %d. Unable to create socket: errno %d", cfg->station_id, errno);
+        return ESP_FAIL;
+    }
+
+    int err = bind(sock, (struct sockaddr *)&listen_addr, sizeof(listen_addr));
+    if (err < 0)
+    {
+        ESP_LOGE(TAG, "Failed to add station %d. Socket unable to bind: errno %d", cfg->station_id, errno);
+        close(sock);
+        return ESP_FAIL;
+    }
+
+    ESP_LOGI(TAG, "Added Econet station %d on port %d", cfg->station_id, cfg->local_udp_port);
+
+    station->station_id = cfg->station_id;
+    station->network_id = 0;
+    station->local_udp_port = cfg->local_udp_port;
+    station->socket = sock;
+    station->is_open = true;
+    return ESP_OK;
+}
+
+void aunbridge_shutdown(void)
+{
+    if (is_running)
+    {
+        shutdown_notify_handle = xTaskGetCurrentTaskHandle();
+
+        // Shutdown Econet RX
+        econet_rx_shutdown();
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        // Shut down AUN RX
+        char tmp = 0;
+        write(rx_udp_ctl_pipe[1], &tmp, sizeof(tmp));
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        is_running = false;
+    }
+}
+
+void aunbridge_reconfigure(void)
+{
+    // Shut down receivers so we can safely modify state
+    aunbridge_shutdown();
+
+    // Clear down stations
+    for (int i = 0; i < ARRAY_SIZE(econet_stations); i++)
+    {
+        if (econet_stations[i].is_open)
+        {
+            closesocket(econet_stations[i].socket);
+            econet_stations[i].is_open = false;
+        }
+        econet_stations[i].station_id = 0;
+    }
+    for (int i = 0; i < ARRAY_SIZE(aun_stations); i++)
+    {
+        aun_stations[i].station_id = 0;
+    }
+
+    // Load configuration from config file
+    config_load_econet(_open_econet_station, _alloc_aun_station);
+
+    // Enable Econet RX for the AUN stations
+    econet_rx_clear_bitmaps();
+    for (int i = 0; i < ARRAY_SIZE(aun_stations); i++)
+    {
+        if (aun_stations[i].station_id != 0)
+        {
+            exonet_rx_enable_station(aun_stations[i].station_id);
+        }
+    }
+
+    // Start receivers
+    xTaskCreate(_aun_udp_rx_task, "aun_udp_rx", 4096, NULL, 1, NULL);
+    xTaskCreate(_aun_econet_rx_task, "aun_econet_rx", 4096, NULL, 1, NULL);
+    is_running = true;
 }
 
 void aunbrige_start(void)
 {
-    struct sockaddr_in listen_addr = {
-        .sin_addr.s_addr = htonl(INADDR_ANY),
-        .sin_family = AF_INET,
-        .sin_port = htons(32768),
-    };
-
-    aun_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-    if (aun_sock < 0)
-    {
-        ESP_LOGE(TAG, "Unable to create socket: errno %d", errno);
-        return;
-    }
-
-    int err = bind(aun_sock, (struct sockaddr *)&listen_addr, sizeof(listen_addr));
-    if (err < 0)
-    {
-        ESP_LOGE(TAG, "Socket unable to bind: errno %d", errno);
-        close(aun_sock);
-        return;
-    }
-
     ack_queue = xQueueCreate(10, sizeof(aun_hdr_t));
-    xTaskCreate(_aun_udp_rx_task, "aun_udp_rx", 4096, NULL, 1, NULL);
-    xTaskCreate(_aun_econet_rx_task, "aun_econet_rx", 4096, NULL, 1, NULL);
+    pipe(rx_udp_ctl_pipe); // Ugh. I feel dirty using sockets on embedded!
+    is_running = false;
+    aunbridge_reconfigure();
 }
