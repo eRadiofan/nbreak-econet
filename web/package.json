@@ -27,6 +27,7 @@
     "ws": "^8.18.3"
   },
   "dependencies": {
+    "@iconify/svelte": "^5.1.0",
     "@tailwindcss/vite": "^4.1.17",
     "svelte-spa-router": "^4.0.1"
   }

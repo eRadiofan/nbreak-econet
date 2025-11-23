@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { activePage } from "../../lib/stores";
+  import Icon from '@iconify/svelte';
 
   import StatusPage from "../pages/StatusPage.svelte";
   import WifiPage from "../pages/WifiPage.svelte";
@@ -13,12 +14,12 @@
   export let closeSidebar;
 
   const navItems = [
-    { id: "status", label: "Status", component: StatusPage },
-    { id: "econet", label: "Econet and AUN", component: EconetPage },
-    { id: "wifi", label: "WiFi network", component: WifiPage },
-    { id: "wifi_ap", label: "WiFi access point", component: WifiApPage },
-    { id: "system", label: "System", component: SystemPage },
-    { id: "logs", label: "Logs", component: LogsPage },
+    { id: "status", label: "Status", component: StatusPage, icon: "gridicons:stats-up"},
+    { id: "econet", label: "Econet and AUN", component: EconetPage,  icon: "lucide:network" },
+    { id: "wifi", label: "WiFi network", component: WifiPage, icon: "mdi:wifi" },
+    { id: "wifi_ap", label: "WiFi access point", component: WifiApPage, icon: "mdi:access-point" },
+    { id: "system", label: "System", component: SystemPage, icon: "hugeicons:gears"},
+    { id: "logs", label: "Logs", component: LogsPage, icon: "mdi:console"},
   ];
 
   onMount(() => {
@@ -47,7 +48,10 @@
           class:hover:bg-gray-100={$activePage !== item.component}
           on:click={() => ($activePage = item.component)}
         >
-          <span>{item.label}</span>
+          <span class="flex items-center gap-2">
+            <Icon icon={item.icon} width="18" height="18" />
+            {item.label}
+          </span>
           {#if $activePage === item.component}
             <span class="text-[0.65rem] uppercase tracking-wide text-sky-500"
               >●</span
