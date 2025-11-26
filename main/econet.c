@@ -18,51 +18,64 @@
 #define ECONET_PRIVATE_API
 #include "econet.h"
 
+#define ECONET_CLK_TMR_CHANNEL LEDC_TIMER_0
+#define ECONET_CLK_PWM_CHANNEL LEDC_CHANNEL_0
+
 econet_config_t econet_cfg;
 econet_stats_t econet_stats;
 
 void econet_clock_setup(void)
 {
-    if (econet_cfg.clk_oe_pin != -1)
-    {
-        ledc_timer_config_t ledc_timer = {
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .timer_num = LEDC_TIMER_0,
-            .duty_resolution = LEDC_TIMER_8_BIT,
-            .freq_hz = econet_cfg.clk_freq_hz,
-            .clk_cfg = LEDC_AUTO_CLK};
-        ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
 
-        ledc_channel_config_t ledc_channel = {
-            .gpio_num = econet_cfg.clk_output_pin,
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_0,
-            .timer_sel = LEDC_TIMER_0,
-            .duty = (255 * 50) / 100, // 50% duty
-            .hpoint = 0,
-            .flags.output_invert = 0};
-        ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
-    }
+    // Clock OE
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << econet_cfg.clk_oe_pin) | (1ULL << 12),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_down_en = 0,
+        .pull_up_en = 0,
+        .intr_type = GPIO_INTR_DISABLE};
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
 
-    if (econet_cfg.clk_oe_pin != -1)
-    {
-        gpio_config_t io_conf = {
-            .pin_bit_mask = (1ULL << econet_cfg.clk_oe_pin) | (1ULL << 12),
-            .mode = GPIO_MODE_OUTPUT,
-            .pull_down_en = 0,
-            .pull_up_en = 0,
-            .intr_type = GPIO_INTR_DISABLE};
-        ESP_ERROR_CHECK(gpio_config(&io_conf));
-        gpio_set_level(econet_cfg.clk_oe_pin, econet_cfg.clk_oe_pin != -1 ? 1 : 0);
-    }
+    // PWM generation (LED module)
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .timer_num = ECONET_CLK_TMR_CHANNEL,
+        .duty_resolution = LEDC_TIMER_7_BIT,
+        .freq_hz = econet_cfg.clk_freq_hz,
+        .clk_cfg = LEDC_AUTO_CLK};
+    ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+    ledc_channel_config_t ledc_channel = {
+        .gpio_num = econet_cfg.clk_output_pin,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = ECONET_CLK_PWM_CHANNEL,
+        .timer_sel = LEDC_TIMER_0,
+        .duty = 0,
+        .hpoint = 0,
+        .flags.output_invert = 0};
+    ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
 }
 
-void econet_clock_start(void)
+void econet_clock_reconfigure(void)
 {
-    if (econet_cfg.clk_oe_pin != -1)
+    config_econet_clock_t clock_cfg;
+    config_load_econet_clock(&clock_cfg);
+
+    if (clock_cfg.mode == ECONET_CLOCK_INTERNAL)
     {
-        ESP_ERROR_CHECK(ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0));
+        gpio_set_level(econet_cfg.clk_oe_pin, 1);
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, ECONET_CLK_PWM_CHANNEL,
+                      (128 * clock_cfg.duty_pc) / 100);
+        ledc_set_freq(LEDC_LOW_SPEED_MODE, ECONET_CLK_TMR_CHANNEL,
+                      clock_cfg.frequency_hz);
     }
+    else if (clock_cfg.mode == ECONET_CLOCK_EXTERNAL)
+    {
+        gpio_set_level(econet_cfg.clk_oe_pin, 0);
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, ECONET_CLK_PWM_CHANNEL, 0);
+    }
+
+    ESP_ERROR_CHECK(ledc_update_duty(LEDC_LOW_SPEED_MODE, ECONET_CLK_PWM_CHANNEL));
 }
 
 void econet_setup(const econet_config_t *config)
@@ -82,7 +95,7 @@ void econet_setup(const econet_config_t *config)
 void econet_start(void)
 {
     ESP_LOGI(TAG, "Starting ADLC transciever");
-    econet_clock_start();
+    econet_clock_reconfigure();
     econet_rx_start();
     econet_tx_start();
 }

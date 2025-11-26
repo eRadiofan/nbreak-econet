@@ -62,6 +62,13 @@ export type EconetSettings = {
   aunStations?: AUNRow[];
 };
 
+export type ClockMode = "internal" | "external";
+  
+export type EconetClockSettings = {
+  mode: ClockMode;
+  internalFrequencyHz: number;
+  internalDutyCycle: number; // percent, 0–100
+};
 
 export type StatsStreamPayload = {
   aunbridge_stats?: Partial<AunbridgeStats>;
@@ -81,4 +88,10 @@ export type ClientMessage =
   | { type: "get_econet"; id: number }
   | { type: "get_wifi_ap"; id: number }
   | { type: "reboot"; id: number }
-  | { type: "factory_reset"; id: number };
+  | { type: "factory_reset"; id: number }
+  | { type: "save_econet_clock"; id: number, settings: EconetClockSettings }
+  | { type: "get_econet_clock"; id: number };
+
+
+
+

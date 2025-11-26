@@ -12,6 +12,7 @@
 
 #include "config.h"
 #include "aun_bridge.h"
+#include "econet.h"
 #include "cJSON.h"
 #include "lwip/sockets.h"
 #include "nvs_flash.h"
@@ -69,13 +70,21 @@ static esp_err_t send_ok_response(int request_id, int fd)
     return http_ws_send(fd, response);
 }
 
+static esp_err_t send_err_response(int request_id, int fd, const char* msg)
+{
+    char response[128];
+    snprintf(response, sizeof(response),
+             "{\"type\":\"response\",\"id\": %d, \"err\":\"%s\"}",
+             request_id, msg);
+    return http_ws_send(fd, response);
+}
+
 static esp_err_t _ws_save_econet(int request_id, const cJSON *payload, int fd)
 {
     const cJSON *settings = cJSON_GetObjectItemCaseSensitive(payload, "settings");
     if (!cJSON_IsObject(settings))
     {
-        ESP_LOGW(TAG, "JSON missing 'settings' from fd=%d", fd);
-        return ESP_FAIL;
+        return send_err_response(request_id, fd, "Missing settings");
     }
 
     config_save_econet(settings);
@@ -118,8 +127,7 @@ static esp_err_t _ws_save_wifi(int request_id, const cJSON *payload, int fd)
     const cJSON *settings = cJSON_GetObjectItemCaseSensitive(payload, "settings");
     if (!cJSON_IsObject(settings))
     {
-        ESP_LOGW(TAG, "JSON missing 'settings' from fd=%d", fd);
-        return ESP_FAIL;
+        return send_err_response(request_id, fd, "Missing settings");
     }
 
     const cJSON *ssid = cJSON_GetObjectItemCaseSensitive(settings, "ssid");
@@ -179,8 +187,7 @@ static esp_err_t _ws_save_wifi_ap(int request_id, const cJSON *payload, int fd)
     const cJSON *settings = cJSON_GetObjectItemCaseSensitive(payload, "settings");
     if (!cJSON_IsObject(settings))
     {
-        ESP_LOGW(TAG, "JSON missing 'settings' from fd=%d", fd);
-        return ESP_FAIL;
+        return send_err_response(request_id, fd, "Missing settings");
     }
 
     const cJSON *ssid = cJSON_GetObjectItemCaseSensitive(settings, "ssid");
@@ -292,6 +299,60 @@ static esp_err_t ws_handle_reboot(int request_id, const cJSON *payload, int fd)
     return ret;
 }
 
+
+static esp_err_t _ws_save_econet_clock(int request_id, const cJSON *payload, int fd)
+{
+    const cJSON *settings = cJSON_GetObjectItemCaseSensitive(payload, "settings");
+    if (!cJSON_IsObject(settings))
+    {
+        return send_err_response(request_id, fd, "Missing settings");
+    }
+
+    const cJSON *mode = cJSON_GetObjectItemCaseSensitive(settings, "mode");
+    const cJSON *freq = cJSON_GetObjectItemCaseSensitive(settings, "internalFrequencyHz");
+    const cJSON *duty = cJSON_GetObjectItemCaseSensitive(settings, "internalDutyCycle");
+
+    if (!mode || !freq || !duty) {
+        return send_err_response(request_id, fd, "Missing fields");
+    }
+
+    if (duty->valueint < 1 || duty->valueint>100 || freq->valueint < 50000 || freq->valueint > 1000000) {
+        return send_err_response(request_id, fd, "Unacceptable clock values");
+    }
+
+    config_econet_clock_t clock_cfg = {
+        .mode = (cJSON_IsString(mode) && !strcmp(mode->valuestring, "internal")) ? ECONET_CLOCK_INTERNAL : ECONET_CLOCK_EXTERNAL,
+        .frequency_hz = freq->valueint,
+        .duty_pc = duty->valueint,
+    };
+
+    config_save_econet_clock(&clock_cfg);
+
+    econet_clock_reconfigure();
+
+    return send_ok_response(request_id, fd);
+}
+
+static esp_err_t _ws_get_econet_clock(int request_id, const cJSON *payload, int fd)
+{
+    config_econet_clock_t clock_cfg;
+    config_load_econet_clock(&clock_cfg);
+
+    char response[256];
+    snprintf(response, sizeof(response),
+             "{\"type\":\"response\",\"id\": %d, \"ok\":true,"
+             "\"settings\": {"
+             "\"mode\": \"%s\","
+             "\"internalFrequencyHz\": %lu,"
+             "\"internalDutyCycle\": %lu"
+             "}}",
+             request_id,
+             clock_cfg.mode==ECONET_CLOCK_INTERNAL ? "internal" : "external",
+             clock_cfg.frequency_hz,
+             clock_cfg.duty_pc);
+    return http_ws_send(fd, response);
+}
+
 static const struct
 {
     const char *type;
@@ -305,6 +366,8 @@ static const struct
     {"save_wifi_ap", _ws_save_wifi_ap},
     {"get_econet", _ws_get_econet},
     {"save_econet", _ws_save_econet},
+    {"get_econet_clock", _ws_get_econet_clock},
+    {"save_econet_clock", _ws_save_econet_clock},
 
 };
 
@@ -324,9 +387,7 @@ static esp_err_t ws_dispatch(const char *type, int id, const cJSON *payload, int
 
 static esp_err_t ws_handle_message(const char *msg, size_t len, int fd)
 {
-    // Basic size guard if you want one
-    if (len == 0)
-    {
+    if (len == 0) {
         return ESP_OK;
     }
 

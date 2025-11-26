@@ -213,3 +213,24 @@ void config_init(void)
 
     config_load_wifi();
 }
+
+esp_err_t config_save_econet_clock(const config_econet_clock_t* cfg)
+{
+    return _save_config("econet_clock", cfg, sizeof(*cfg));
+}
+
+esp_err_t config_load_econet_clock(config_econet_clock_t* cfg)
+{
+    esp_err_t err = _load_config("econet_clock", cfg, sizeof(*cfg));
+    if (err != ESP_OK)
+    {
+        ESP_LOGW(TAG, "Using default Econet clock configuration");
+        memset(cfg, 0, sizeof(*cfg));
+        cfg->duty_pc = 50;
+        cfg->frequency_hz = 100000;
+        cfg->mode = ECONET_CLOCK_INTERNAL;
+    }
+    return ESP_OK;
+}
+
+

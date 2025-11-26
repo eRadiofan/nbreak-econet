@@ -20,6 +20,7 @@ import type {
   ClientMessage,
   EconetStats,
   ServerMessage,
+  EconetClockSettings,
 } from "./src/lib/types";
 
 export function mockWsPlugin(): PluginOption {
@@ -152,12 +153,36 @@ export function mockWsPlugin(): PluginOption {
               };
               ws.send(JSON.stringify(response));
             }
+
+            if (msg.type=="get_econet_clock") {
+              let response_settings: EconetClockSettings = {
+                mode: "internal",
+                internalFrequencyHz: 100000,
+                internalDutyCycle: 30,
+              }
+              let response: ServerMessage = {
+                type: "response",
+                id: msg.id,
+                ok: true,
+                settings: response_settings,
+              }
+              ws.send(JSON.stringify(response));
+            }
+
+            if (msg.type=="save_econet_clock") {
+              let response: ServerMessage = {
+                type: "response",
+                id: msg.id,
+                error: "No saving for you",
+              };
+              ws.send(JSON.stringify(response));
+            }
   
             if (msg.type == "save_econet") {
-              msg.settings.econetStations.forEach(n=>{
+              msg?.settings?.econetStations?.forEach(n=>{
                 console.log(`ECO Station ${n.station_id}`);
               })
-              msg.settings.aunStations.forEach(n=>{
+              msg?.settings?.aunStations?.forEach(n=>{
                 console.log(`AUN Station ${n.remote_ip}`);
               })
               let response: ServerMessage = {

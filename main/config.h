@@ -25,6 +25,18 @@ typedef struct
 } config_wifi_t;
 extern config_wifi_t config_wifi;
 
+typedef enum {
+    ECONET_CLOCK_INTERNAL,
+    ECONET_CLOCK_EXTERNAL,
+} econet_clock_mode_t;
+
+typedef struct
+{
+    uint32_t frequency_hz;
+    uint32_t duty_pc;
+    econet_clock_mode_t mode;
+} config_econet_clock_t;
+
 typedef struct
 {
     uint8_t station_id;
@@ -50,3 +62,6 @@ esp_err_t config_load_wifi(void);
 cJSON *config_load_econet_json(void);
 esp_err_t config_save_econet(const cJSON *settings);
 esp_err_t config_load_econet(config_cb_econet_station eco_cb, config_cb_aun_station aun_cb);
+
+esp_err_t config_save_econet_clock(const config_econet_clock_t* clk);
+esp_err_t config_load_econet_clock(config_econet_clock_t* clk);

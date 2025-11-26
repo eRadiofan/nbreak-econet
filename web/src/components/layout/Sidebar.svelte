@@ -7,6 +7,7 @@
   import WifiPage from "../pages/WifiPage.svelte";
   import WifiApPage from "../pages/WifiApPage.svelte";
   import EconetPage from "../pages/EconetPage.svelte";
+  import EconetClockPage from "../pages/EconetClockPage.svelte";
   import SystemPage from "../pages/SystemPage.svelte";
   import LogsPage from "../pages/LogsPage.svelte";
 
@@ -16,6 +17,7 @@
   const navItems = [
     { id: "status", label: "Status", component: StatusPage, icon: "gridicons:stats-up"},
     { id: "econet", label: "Econet and AUN", component: EconetPage,  icon: "lucide:network" },
+    { id: "eclock", label: "Econet Clock", component: EconetClockPage,  icon: "meteor-icons:wave-square" },
     { id: "wifi", label: "WiFi network", component: WifiPage, icon: "mdi:wifi" },
     { id: "wifi_ap", label: "WiFi access point", component: WifiApPage, icon: "mdi:access-point" },
     { id: "system", label: "System", component: SystemPage, icon: "hugeicons:gears"},

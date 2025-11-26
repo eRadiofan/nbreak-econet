@@ -59,6 +59,7 @@ extern econet_stats_t econet_stats;
 extern MessageBufferHandle_t econet_rx_frame_buffer;
 
 void econet_setup(const econet_config_t *config);
+void econet_clock_reconfigure(void);
 void econet_start(void);
 bool econet_send(const uint8_t *data, uint16_t length);
 void econet_rx_clear_bitmaps(void);
