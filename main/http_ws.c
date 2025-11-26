@@ -70,7 +70,7 @@ static esp_err_t send_ok_response(int request_id, int fd)
     return http_ws_send(fd, response);
 }
 
-static esp_err_t send_err_response(int request_id, int fd, const char* msg)
+static esp_err_t send_err_response(int request_id, int fd, const char *msg)
 {
     char response[128];
     snprintf(response, sizeof(response),
@@ -194,35 +194,30 @@ static esp_err_t _ws_save_wifi_ap(int request_id, const cJSON *payload, int fd)
     const cJSON *password = cJSON_GetObjectItemCaseSensitive(settings, "password");
     const cJSON *is_enabled = cJSON_GetObjectItemCaseSensitive(settings, "enabled");
 
-    if (cJSON_IsString(ssid))
+    if (!cJSON_IsString(ssid) || !cJSON_IsString(password) || !cJSON_IsBool(is_enabled))
     {
-        snprintf((char *)config_wifi.ap.ap.ssid,
-                 sizeof(config_wifi.ap.ap.ssid),
-                 "%s",
-                 ssid->valuestring);
+        return send_err_response(request_id, fd, "Missing or incorrect fields");
     }
 
-    if (cJSON_IsString(password))
+    snprintf((char *)config_wifi.ap.ap.ssid,
+             sizeof(config_wifi.ap.ap.ssid),
+             "%s",
+             ssid->valuestring);
+
+    snprintf((char *)config_wifi.ap.ap.password,
+             sizeof(config_wifi.ap.ap.password),
+             "%s",
+             password->valuestring);
+    if (strlen(password->valuestring) > 0)
     {
-        snprintf((char *)config_wifi.ap.ap.password,
-                 sizeof(config_wifi.ap.ap.password),
-                 "%s",
-                 password->valuestring);
-        if (strlen(password->valuestring) > 0)
-        {
-            config_wifi.ap.ap.authmode = WIFI_AUTH_WPA2_PSK;
-        }
-        else
-        {
-            config_wifi.ap.ap.authmode = WIFI_AUTH_OPEN;
-        }
+        config_wifi.ap.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    }
+    else
+    {
+        config_wifi.ap.ap.authmode = WIFI_AUTH_OPEN;
     }
 
-    config_wifi.ap_enabled = true;
-    if (cJSON_IsBool(is_enabled))
-    {
-        config_wifi.ap_enabled = is_enabled->valueint;
-    }
+    config_wifi.ap_enabled = is_enabled->valueint ? true : false;
 
     esp_err_t ret = send_ok_response(request_id, fd);
     if (ret == ESP_OK)
@@ -299,7 +294,6 @@ static esp_err_t ws_handle_reboot(int request_id, const cJSON *payload, int fd)
     return ret;
 }
 
-
 static esp_err_t _ws_save_econet_clock(int request_id, const cJSON *payload, int fd)
 {
     const cJSON *settings = cJSON_GetObjectItemCaseSensitive(payload, "settings");
@@ -312,16 +306,18 @@ static esp_err_t _ws_save_econet_clock(int request_id, const cJSON *payload, int
     const cJSON *freq = cJSON_GetObjectItemCaseSensitive(settings, "internalFrequencyHz");
     const cJSON *duty = cJSON_GetObjectItemCaseSensitive(settings, "internalDutyCycle");
 
-    if (!mode || !freq || !duty) {
-        return send_err_response(request_id, fd, "Missing fields");
+    if (!cJSON_IsString(mode) || !cJSON_IsNumber(freq) || !cJSON_IsNumber(duty))
+    {
+        return send_err_response(request_id, fd, "Missing or incorrect fields");
     }
 
-    if (duty->valueint < 1 || duty->valueint>100 || freq->valueint < 50000 || freq->valueint > 1000000) {
+    if (duty->valueint < 1 || duty->valueint > 100 || freq->valueint < 50000 || freq->valueint > 300000)
+    {
         return send_err_response(request_id, fd, "Unacceptable clock values");
     }
 
     config_econet_clock_t clock_cfg = {
-        .mode = (cJSON_IsString(mode) && !strcmp(mode->valuestring, "internal")) ? ECONET_CLOCK_INTERNAL : ECONET_CLOCK_EXTERNAL,
+        .mode = !strcmp(mode->valuestring, "internal") ? ECONET_CLOCK_INTERNAL : ECONET_CLOCK_EXTERNAL,
         .frequency_hz = freq->valueint,
         .duty_pc = duty->valueint,
     };
@@ -347,7 +343,7 @@ static esp_err_t _ws_get_econet_clock(int request_id, const cJSON *payload, int 
              "\"internalDutyCycle\": %lu"
              "}}",
              request_id,
-             clock_cfg.mode==ECONET_CLOCK_INTERNAL ? "internal" : "external",
+             clock_cfg.mode == ECONET_CLOCK_INTERNAL ? "internal" : "external",
              clock_cfg.frequency_hz,
              clock_cfg.duty_pc);
     return http_ws_send(fd, response);
@@ -387,7 +383,8 @@ static esp_err_t ws_dispatch(const char *type, int id, const cJSON *payload, int
 
 static esp_err_t ws_handle_message(const char *msg, size_t len, int fd)
 {
-    if (len == 0) {
+    if (len == 0)
+    {
         return ESP_OK;
     }
 
@@ -395,23 +392,17 @@ static esp_err_t ws_handle_message(const char *msg, size_t len, int fd)
     if (!root)
     {
         ESP_LOGW(TAG, "Invalid JSON from fd=%d", fd);
-        return ESP_FAIL;
+        return send_err_response(0, fd, "Invalid JSON");
     }
 
     cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
-    if (!cJSON_IsString(type) || type->valuestring == NULL)
-    {
-        ESP_LOGW(TAG, "JSON missing 'type' from fd=%d", fd);
-        cJSON_Delete(root);
-        return ESP_FAIL;
-    }
-
     cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "id");
-    if (!cJSON_IsNumber(id))
+
+    if (!cJSON_IsString(type) || !cJSON_IsNumber(id))
     {
-        ESP_LOGW(TAG, "JSON missing 'id' from fd=%d", fd);
+        ESP_LOGW(TAG, "JSON 'type' or 'id' error from fd=%d", fd);
         cJSON_Delete(root);
-        return ESP_FAIL;
+        return send_err_response(0, fd, "Missing or incorrect type or ID");
     }
 
     esp_err_t ret = ws_dispatch(type->valuestring, id->valueint, root, fd);
@@ -427,7 +418,6 @@ esp_err_t http_ws_handler(httpd_req_t *req)
     // First call: HTTP GET upgrade to websocket
     if (req->method == HTTP_GET)
     {
-        ESP_LOGI(TAG, "WS handshake done, new client fd=%d", fd);
         ws_client_add(fd);
         return ESP_OK;
     }
@@ -535,8 +525,6 @@ esp_err_t http_ws_broadcast_json(const char *json)
         esp_err_t ret = httpd_ws_send_frame_async(http_server, fd, &frame);
         if (ret != ESP_OK)
         {
-            ESP_LOGW(TAG, "Async send failed to fd=%d: %d, dropping client", fd, ret);
-            ws_client_remove(fd);
             last_err = ret;
         }
     }
