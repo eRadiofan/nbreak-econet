@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { activePage } from "../../lib/stores";
-  import Icon from '@iconify/svelte';
 
   import StatusPage from "../pages/StatusPage.svelte";
   import WifiPage from "../pages/WifiPage.svelte";
@@ -15,13 +14,13 @@
   export let closeSidebar;
 
   const navItems = [
-    { id: "status", label: "Status", component: StatusPage, icon: "gridicons:stats-up"},
-    { id: "econet", label: "Econet and AUN", component: EconetPage,  icon: "lucide:network" },
-    { id: "eclock", label: "Econet Clock", component: EconetClockPage,  icon: "meteor-icons:wave-square" },
-    { id: "wifi", label: "WiFi network", component: WifiPage, icon: "mdi:wifi" },
-    { id: "wifi_ap", label: "WiFi access point", component: WifiApPage, icon: "mdi:access-point" },
-    { id: "system", label: "System", component: SystemPage, icon: "hugeicons:gears"},
-    { id: "logs", label: "Logs", component: LogsPage, icon: "mdi:console"},
+    { id: "status", label: "Status", component: StatusPage, icon: "gridicons--stats-up"},
+    { id: "econet", label: "Econet and AUN", component: EconetPage,  icon: "lucide--network" },
+    { id: "eclock", label: "Econet Clock", component: EconetClockPage,  icon: "meteor-icons--wave-square" },
+    { id: "wifi", label: "WiFi network", component: WifiPage, icon: "mdi--wifi" },
+    { id: "wifi_ap", label: "WiFi access point", component: WifiApPage, icon: "mdi--access-point" },
+    { id: "system", label: "System", component: SystemPage, icon: "hugeicons--gears"},
+    { id: "logs", label: "Logs", component: LogsPage, icon: "mdi--console"},
   ];
 
   onMount(() => {
@@ -51,7 +50,7 @@
           on:click={() => ($activePage = item.component)}
         >
           <span class="flex items-center gap-2">
-            <Icon icon={item.icon} width="18" height="18" />
+            <span class="icon-[{item.icon}] text-lg"></span>
             {item.label}
           </span>
           {#if $activePage === item.component}

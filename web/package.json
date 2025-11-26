@@ -10,6 +10,12 @@
     "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json"
   },
   "devDependencies": {
+    "@iconify-json/gridicons": "^1.2.4",
+    "@iconify-json/lucide": "^1.2.76",
+    "@iconify-json/mdi": "^1.2.3",
+    "@iconify-json/hugeicons": "^1.2.18",
+    "@iconify-json/meteor-icons": "^1.2.1",
+    "@iconify/tailwind4": "^1.1.1",
     "@sveltejs/vite-plugin-svelte": "^6.2.1",
     "@tailwindcss/cli": "^4.1.17",
     "@tailwindcss/postcss": "^4.1.17",
@@ -27,7 +33,6 @@
     "ws": "^8.18.3"
   },
   "dependencies": {
-    "@iconify/svelte": "^5.1.0",
     "@tailwindcss/vite": "^4.1.17",
     "svelte-spa-router": "^4.0.1"
   }

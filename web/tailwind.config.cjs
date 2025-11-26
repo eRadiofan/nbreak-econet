@@ -5,4 +5,13 @@ export default {
     extend: {},
   },
   plugins: [],
+  safelist: [
+    "icon-[mdi--wifi]",
+    "icon-[mdi--access-point]",
+    "icon-[mdi--console]",
+    "icon-[gridicons--stats-up]",
+    "icon-[lucide--network]",
+    "icon-[hugeicons--gears]",
+    "icon-[meteor-icons--wave-square]",
+  ]
 };
