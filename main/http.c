@@ -97,13 +97,14 @@ httpd_handle_t http_server_start(void)
         .handler = _file_handler,
         .user_ctx = NULL};
 
-    if (httpd_start(&http_server, &config) == ESP_OK)
+    if (httpd_start(&http_server, &config) != ESP_OK)
     {
-        httpd_register_uri_handler(http_server, &ws);
-        httpd_register_uri_handler(http_server, &file_server);
-        return http_server;
+        ESP_LOGE(TAG, "Error starting server!");
+        return NULL;
     }
 
-    ESP_LOGE(TAG, "Error starting server!");
-    return NULL;
+    httpd_register_uri_handler(http_server, &ws);
+    httpd_register_uri_handler(http_server, &file_server);
+    return http_server;
+
 }

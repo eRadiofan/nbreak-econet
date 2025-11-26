@@ -74,7 +74,7 @@ static esp_err_t send_err_response(int request_id, int fd, const char* msg)
 {
     char response[128];
     snprintf(response, sizeof(response),
-             "{\"type\":\"response\",\"id\": %d, \"err\":\"%s\"}",
+             "{\"type\":\"response\",\"id\": %d, \"error\":\"%s\"}",
              request_id, msg);
     return http_ws_send(fd, response);
 }
