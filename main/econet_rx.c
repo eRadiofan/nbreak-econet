@@ -32,7 +32,8 @@ static uint32_t is_frame_active;
 static uint8_t rx_bytes[2048];
 static uint16_t rx_frame_len;
 static uint16_t rx_crc;
-static DRAM_ATTR bool rx_is_send_shutdown;
+static uint8_t DRAM_ATTR rx_idle_one_counter;
+
 portMUX_TYPE econet_rx_interrupt_lock = portMUX_INITIALIZER_UNLOCKED;
 
 typedef struct
@@ -95,17 +96,30 @@ static inline void IRAM_ATTR _complete_frame()
         BaseType_t is_awoken = true;
         if (data_len > 4)
         {
-            uint8_t ack_frame[4] = {rx_bytes[2], rx_bytes[3], rx_bytes[0], rx_bytes[1]};
+            econet_tx_command_t ack_cmd = {
+                .cmd = 'A',
+                .dst_stn = rx_bytes[2],
+                .dst_net = rx_bytes[3],
+                .src_stn = rx_bytes[0],
+                .src_net = rx_bytes[1]};
+            xQueueSendFromISR(tx_command_queue, &ack_cmd, NULL);
+
             portENTER_CRITICAL_ISR(&econet_rx_interrupt_lock);
-            xMessageBufferSend(tx_frame_buffer, ack_frame, sizeof(ack_frame), 0);
-            xMessageBufferSend(econet_rx_frame_buffer, rx_bytes, data_len, 0);
+            xMessageBufferSendFromISR(econet_rx_frame_buffer, rx_bytes, data_len, pdFALSE);
             portEXIT_CRITICAL_ISR(&econet_rx_interrupt_lock);
         }
         else
         {
             // Received ACK, let TX side know
             econet_stats.rx_ack_count++;
-            vTaskNotifyGiveFromISR(tx_task, &is_awoken);
+
+            econet_tx_command_t ack_cmd = {
+                .cmd = 'a',
+                .dst_stn = rx_bytes[0],
+                .dst_net = rx_bytes[1],
+                .src_stn = rx_bytes[2],
+                .src_net = rx_bytes[3]};
+            xQueueSendFromISR(tx_command_queue, &ack_cmd, NULL);
         }
 
         portYIELD_FROM_ISR(is_awoken);
@@ -114,6 +128,30 @@ static inline void IRAM_ATTR _complete_frame()
 
 static inline void IRAM_ATTR _clk_bit(uint8_t c)
 {
+
+    if (c && !tx_is_in_progress)
+    {
+        if (rx_idle_one_counter < 16)
+        {
+            rx_idle_one_counter++;
+            if (rx_idle_one_counter == 16)
+            {
+                portENTER_CRITICAL_ISR(&econet_rx_interrupt_lock);
+                char idle_rx_cmd = 'I';
+                xMessageBufferSendFromISR(econet_rx_frame_buffer, &idle_rx_cmd, 1, NULL);
+                portEXIT_CRITICAL_ISR(&econet_rx_interrupt_lock);
+                econet_tx_command_t idle_cmd = {
+                    .cmd = 'I',
+                };
+                xQueueSendFromISR(tx_command_queue, &idle_cmd, NULL);
+                portYIELD_FROM_ISR(pdTRUE);
+            }
+        }
+    }
+    else
+    {
+        rx_idle_one_counter = 0;
+    }
 
     _raw_shift_in = (_raw_shift_in << 1) | c;
 
@@ -195,6 +233,11 @@ static bool IRAM_ATTR _on_recv_callback(parlio_rx_unit_handle_t rx_unit, const p
         c <<= 2;
     }
     return false;
+}
+
+bool econet_rx_is_idle(void)
+{
+    return rx_idle_one_counter == 16;
 }
 
 void econet_rx_setup(void)

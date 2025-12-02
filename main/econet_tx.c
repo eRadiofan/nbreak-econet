@@ -23,17 +23,29 @@
 #define ECONET_PRIVATE_API
 #include "econet.h"
 
+typedef struct
+{
+    uint8_t *bits;
+    size_t bits_size;
+    uint32_t byte_pos;
+    uint32_t bit_pos;
+    uint8_t one_count;
+    uint8_t c;
+} tx_bitstuff_ctx;
+
+TaskHandle_t tx_task = NULL;
+QueueHandle_t tx_command_queue;
+bool tx_is_in_progress;
+
 static parlio_tx_unit_handle_t tx_unit;
 static TaskHandle_t tx_sender_task = NULL;
 static bool tx_sent_ack;
-static uint8_t tx_frame[2048];
-static uint8_t tx_bits[16384];
-static uint32_t tx_write_byte_pos;
-static uint32_t tx_write_bit_pos;
-static uint8_t tx_write_one_count;
 
-TaskHandle_t tx_task = NULL;
-MessageBufferHandle_t tx_frame_buffer;
+// Outgoing frame
+static size_t scout_bits_len;
+static uint8_t DRAM_ATTR scout_bits[512];
+static uint8_t tx_bits[16384];
+static size_t tx_bits_len;
 
 static inline uint16_t IRAM_ATTR crc16_x25(const uint8_t *data, size_t len)
 {
@@ -50,69 +62,76 @@ static inline uint16_t IRAM_ATTR crc16_x25(const uint8_t *data, size_t len)
     return (uint16_t)(crc ^ 0xFFFF);
 }
 
-static inline void IRAM_ATTR _add_raw_bit(uint8_t b)
+static inline void IRAM_ATTR _add_raw_bit(tx_bitstuff_ctx *ctx, uint8_t b)
 {
     const int shift_width = 4;
-    tx_bits[tx_write_byte_pos] = (tx_bits[tx_write_byte_pos] << shift_width) | b;
-    tx_write_bit_pos += shift_width;
-    if (tx_write_bit_pos >= 8)
+    ctx->c = ctx->c << shift_width | b;
+    ctx->bit_pos += shift_width;
+    if (ctx->bit_pos >= 8)
     {
-        tx_write_bit_pos = 0;
-        tx_write_byte_pos++;
+        if (ctx->byte_pos < ctx->bits_size)
+        {
+            ctx->bits[ctx->byte_pos] = ctx->c;
+        }
+        ctx->c = 0;
+        ctx->bit_pos = 0;
+        ctx->byte_pos++;
     }
 }
 
-static inline void IRAM_ATTR _add_bit(uint8_t bit)
+static inline void IRAM_ATTR _add_bit(tx_bitstuff_ctx *ctx, uint8_t bit)
 {
-    _add_raw_bit((bit ? 1 : 0) | 2);
+    _add_raw_bit(ctx, (bit ? 1 : 0) | 2);
 }
 
-static inline void IRAM_ATTR _add_byte_unstuffed(uint8_t c)
+static inline void IRAM_ATTR _add_byte_unstuffed(tx_bitstuff_ctx *ctx, uint8_t c)
 {
     for (int j = 0; j < 8; j++)
     {
-        _add_bit(c & 1);
+        _add_bit(ctx, c & 1);
         c >>= 1;
     }
 }
 
-static inline void IRAM_ATTR _add_byte_stuffed(uint8_t c)
+static inline void IRAM_ATTR _add_byte_stuffed(tx_bitstuff_ctx *ctx, uint8_t c)
 {
 
     for (int j = 0; j < 8; j++)
     {
         uint8_t bit = (c & 1);
-        _add_bit(bit);
+        _add_bit(ctx, bit);
         c >>= 1;
         if (bit != 0)
         {
-            tx_write_one_count += 1;
+            ctx->one_count += 1;
         }
         else
         {
-            tx_write_one_count = 0;
+            ctx->one_count = 0;
         }
 
         // Bit stuffing
-        if (tx_write_one_count == 5)
+        if (ctx->one_count == 5)
         {
-            _add_bit(0);
-            tx_write_one_count = 0;
+            _add_bit(ctx, 0);
+            ctx->one_count = 0;
         }
     }
 }
 
-uint32_t IRAM_ATTR _generate_frame_bits(const uint8_t *payload, size_t payload_length)
+size_t IRAM_ATTR _generate_frame_bits(uint8_t *bits, size_t bits_size, const uint8_t *payload, size_t payload_length)
 {
-    tx_write_byte_pos = 0;
-    tx_write_bit_pos = 0;
-    tx_write_one_count = 0;
 
-    _add_byte_unstuffed(0x7e);
+    tx_bitstuff_ctx stuff_ctx = {
+        .bits = bits,
+        .bits_size = bits_size,
+    };
+
+    _add_byte_unstuffed(&stuff_ctx, 0x7e);
 
     for (int i = 0; i < payload_length; i++)
     {
-        _add_byte_stuffed(payload[i]);
+        _add_byte_stuffed(&stuff_ctx, payload[i]);
     }
 
     // Compute CRC over unstuffed payload bytes
@@ -122,28 +141,61 @@ uint32_t IRAM_ATTR _generate_frame_bits(const uint8_t *payload, size_t payload_l
     uint8_t fcs_bytes[2] = {(uint8_t)(fcs & 0xFF), (uint8_t)(fcs >> 8)};
     for (int i = 0; i < 2; i++)
     {
-        _add_byte_stuffed(fcs_bytes[i]);
+        _add_byte_stuffed(&stuff_ctx, fcs_bytes[i]);
     }
 
     // Flag must be unstuffed (but still packed)
-    _add_byte_unstuffed(0x7e);
+    _add_byte_unstuffed(&stuff_ctx, 0x7e);
 
     // Pad out block so it's on correct boundary
     // otherwise subequent transactions are screwed up
-    while (tx_write_bit_pos || (tx_write_byte_pos % 4) != 0)
+    while (stuff_ctx.bit_pos || (stuff_ctx.byte_pos % 4) != 0)
     {
-        _add_raw_bit(0);
+        _add_raw_bit(&stuff_ctx, 0);
     }
 
-    return tx_write_byte_pos;
+    // Check for overflow
+    if (stuff_ctx.byte_pos > stuff_ctx.bits_size)
+    {
+        return 0;
+    }
+
+    return stuff_ctx.byte_pos;
+}
+
+size_t IRAM_ATTR _generate_flag_stream(uint8_t *bits, size_t bits_size, int number_of_flags)
+{
+    tx_bitstuff_ctx stuff_ctx = {
+        .bits = bits,
+        .bits_size = bits_size,
+    };
+    for (int i = 0; i < number_of_flags; i++)
+    {
+        _add_byte_unstuffed(&stuff_ctx, 0x7e);
+    }
+    if (stuff_ctx.byte_pos > stuff_ctx.bits_size)
+    {
+        return 0;
+    }
+    return stuff_ctx.byte_pos;
 }
 
 static void IRAM_ATTR _tx_task(void *params)
 {
-    static uint8_t DRAM_ATTR bus_grab[] = {0xBF, 0xFE, 0xBF, 0xFE};
-    static uint8_t DRAM_ATTR scout_bits[512];
+    bool is_data_ready = false;
+    uint8_t flag_stream[8];
+    uint8_t ack_bits[128];
 
     tx_task = xTaskGetCurrentTaskHandle();
+
+    // Pre-calculate flag bitstream
+    uint32_t flag_stream_length = _generate_flag_stream(flag_stream, sizeof(flag_stream), 2);
+    if (flag_stream_length == 0)
+    {
+        ESP_LOGE(TAG, "Insufficient buffer for flag stream!");
+        vTaskDelete(NULL);
+        return;
+    }
 
     // Configure TX unit transmission parameters
     parlio_transmit_config_t transmit_config = {
@@ -152,42 +204,55 @@ static void IRAM_ATTR _tx_task(void *params)
 
     for (;;)
     {
-        size_t tx_frame_length = xMessageBufferReceive(tx_frame_buffer, tx_frame, sizeof(tx_frame), portMAX_DELAY);
-
-        // If this is an ACK, generate it and send
-        if (tx_frame_length == 4)
+        econet_tx_command_t cmd;
+        if (xQueueReceive(tx_command_queue, &cmd, portMAX_DELAY) != pdTRUE)
         {
-            // Grab bus - this is cheeky hack; I tried flag but it didn't
-            // emit properly. Will use this for now.
+            ESP_LOGE(TAG, "Failed to get TX command queue item");
+            vTaskDelete(NULL);
+            return;
+        }
+
+        // Generate ACK.
+        if (cmd.cmd == 'A')
+        {
+
+            tx_is_in_progress = true;
+            // Grab bus with some early flags
             parlio_transmit_config_t flax_tx_cfg = {
                 .idle_value = 0xFF,
             };
-            parlio_tx_unit_transmit(tx_unit, bus_grab, sizeof(bus_grab) * 8, &flax_tx_cfg);
+            parlio_tx_unit_transmit(tx_unit, flag_stream, flag_stream_length * 8, &flax_tx_cfg);
 
-            size_t tx_bits_length = _generate_frame_bits(tx_frame, 4);
-            ESP_ERROR_CHECK(parlio_tx_unit_transmit(tx_unit, tx_bits, tx_bits_length * 8, &transmit_config));
+            // Generate and send ack
+            size_t tx_len = _generate_frame_bits(ack_bits, sizeof(ack_bits), &cmd.dst_stn, 4);
+            ESP_ERROR_CHECK(parlio_tx_unit_transmit(tx_unit, ack_bits, tx_len * 8, &transmit_config));
             parlio_tx_unit_wait_all_done(tx_unit, -1);
+            tx_is_in_progress = false;
+
             econet_stats.tx_ack_count++;
             continue;
         }
 
-        // Generate scout frame
-        size_t scout_bits_len = _generate_frame_bits(tx_frame, 6);
-        memcpy(scout_bits, tx_bits, scout_bits_len);
+        if (cmd.cmd == 'S')
+        {
+            is_data_ready = true;
+        }
 
-        // Generate payload frame
-        tx_frame[5] = tx_frame[3];
-        tx_frame[4] = tx_frame[2];
-        tx_frame[3] = tx_frame[1];
-        tx_frame[2] = tx_frame[0];
-        size_t tx_bits_length = _generate_frame_bits(&tx_frame[2], tx_frame_length - 2);
+        if (!is_data_ready || !econet_rx_is_idle())
+        {
+            continue;
+        }
+
+        is_data_ready = false;
 
         // Send scout
+        tx_is_in_progress = true;
         ESP_ERROR_CHECK(parlio_tx_unit_transmit(tx_unit, scout_bits, scout_bits_len * 8, &transmit_config));
         parlio_tx_unit_wait_all_done(tx_unit, -1);
+        tx_is_in_progress = false;
 
         // Wait for ack
-        if (ulTaskNotifyTake(pdTRUE, 200) == 0)
+        if (xQueueReceive(tx_command_queue, &cmd, 200) == pdFALSE)
         {
             ESP_LOGW(TAG, "Timeout waiting for scout ack");
             tx_sent_ack = false;
@@ -195,15 +260,33 @@ static void IRAM_ATTR _tx_task(void *params)
             econet_stats.rx_nack_count++;
             continue;
         }
+        if (cmd.cmd == 'I')
+        {
+            ESP_LOGW(TAG, "Bus became idle whilst waiting for scout ack");
+            tx_sent_ack = false;
+            xTaskNotifyGive(tx_sender_task);
+            econet_stats.rx_nack_count++;
+            continue;
+        }
 
         // Send payload frame
-        ESP_ERROR_CHECK(parlio_tx_unit_transmit(tx_unit, tx_bits, tx_bits_length * 8, &transmit_config));
+        tx_is_in_progress = true;
+        ESP_ERROR_CHECK(parlio_tx_unit_transmit(tx_unit, tx_bits, tx_bits_len * 8, &transmit_config));
         parlio_tx_unit_wait_all_done(tx_unit, -1);
+        tx_is_in_progress = false;
 
         // Wait for ack
-        if (ulTaskNotifyTake(pdTRUE, 200) == 0)
+        if (xQueueReceive(tx_command_queue, &cmd, 200) == pdFALSE)
         {
-            ESP_LOGW(TAG, "Timeout waiting for payload ack");
+            ESP_LOGW(TAG, "Timeout waiting for data ack");
+            tx_sent_ack = false;
+            xTaskNotifyGive(tx_sender_task);
+            econet_stats.rx_nack_count++;
+            continue;
+        }
+        if (cmd.cmd == 'I')
+        {
+            ESP_LOGW(TAG, "Bus became idle whilst waiting for data ack");
             tx_sent_ack = false;
             xTaskNotifyGive(tx_sender_task);
             econet_stats.rx_nack_count++;
@@ -216,13 +299,24 @@ static void IRAM_ATTR _tx_task(void *params)
     }
 }
 
-bool econet_send(const uint8_t *data, uint16_t length)
+bool econet_send(uint8_t *data, uint16_t length)
 {
     tx_sender_task = xTaskGetCurrentTaskHandle();
 
-    portENTER_CRITICAL(&econet_rx_interrupt_lock);
-    xMessageBufferSend(tx_frame_buffer, data, length, 0);
-    portEXIT_CRITICAL(&econet_rx_interrupt_lock);
+    // Generate scout frame
+    scout_bits_len = _generate_frame_bits(scout_bits, sizeof(scout_bits), data, 6);
+
+    // Generate payload frame (TODO: Re-const data and make frame builder)
+    data[5] = data[3];
+    data[4] = data[2];
+    data[3] = data[1];
+    data[2] = data[0];
+    tx_bits_len = _generate_frame_bits(tx_bits, sizeof(tx_bits), &data[2], length - 2);
+
+    // Notify sender task
+    econet_tx_command_t cmd = {
+        .cmd = 'S'};
+    xQueueSend(tx_command_queue, &cmd, portMAX_DELAY);
 
     ulTaskNotifyTake(pdTRUE, -1); // Wait for send completion (Full 4-way ACK or NACK)
 
@@ -256,7 +350,7 @@ void econet_tx_setup(void)
     };
     ESP_ERROR_CHECK(parlio_new_tx_unit(&tx_config, &tx_unit));
 
-    tx_frame_buffer = xMessageBufferCreate(4096);
+    tx_command_queue = xQueueCreate(8, sizeof(econet_tx_command_t));
 }
 
 void econet_tx_start(void)

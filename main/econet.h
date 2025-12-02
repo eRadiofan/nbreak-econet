@@ -61,7 +61,7 @@ extern MessageBufferHandle_t econet_rx_frame_buffer;
 void econet_setup(const econet_config_t *config);
 void econet_clock_reconfigure(void);
 void econet_start(void);
-bool econet_send(const uint8_t *data, uint16_t length);
+bool econet_send(uint8_t *data, uint16_t length);
 void econet_rx_clear_bitmaps(void);
 void exonet_rx_enable_station(uint8_t station_id);
 void exonet_rx_enable_network(uint8_t network_id);
@@ -70,11 +70,22 @@ void econet_rx_shutdown(void);
 #ifdef ECONET_PRIVATE_API
 #define TAG "ECONET"
 extern econet_config_t econet_cfg;
-extern MessageBufferHandle_t tx_frame_buffer;
+extern QueueHandle_t tx_command_queue;
 extern portMUX_TYPE econet_rx_interrupt_lock;
 extern TaskHandle_t tx_task;
+extern DRAM_ATTR bool tx_is_in_progress;
 void econet_rx_setup(void);
 void econet_rx_start(void);
 void econet_tx_setup(void);
 void econet_tx_start(void);
+bool econet_rx_is_idle(void);
+typedef struct
+{
+    char cmd;
+    uint8_t dst_stn;
+    uint8_t dst_net;
+    uint8_t src_stn;
+    uint8_t src_net;
+} econet_tx_command_t;
+
 #endif

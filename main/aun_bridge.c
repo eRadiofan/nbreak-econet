@@ -24,6 +24,8 @@
 aunbridge_stats_t aunbridge_stats;
 
 static const char *TAG = "AUN";
+static const char *ECONETTAG = "AUN (ECONET)";
+
 static bool is_running;
 static volatile TaskHandle_t shutdown_notify_handle;
 static QueueHandle_t ack_queue;
@@ -86,6 +88,19 @@ static aun_station_t *_get_aun_station_by_port(uint16_t udp_port)
     return NULL;
 }
 
+static size_t _econet_rx(uint8_t *buffer, size_t buffer_size, uint32_t timeout)
+{
+    size_t length = xMessageBufferReceive(econet_rx_frame_buffer, buffer, buffer_size, timeout);
+    if (length == 1 && (char)buffer[0] == 'S')
+    {
+        econet_rx_clear_bitmaps();
+        ESP_LOGI(TAG, "Econet RX shutdown");
+        xTaskNotifyGive(shutdown_notify_handle);
+        vTaskDelete(NULL);
+    }
+    return length;
+}
+
 static void _aun_econet_rx_task(void *params)
 {
     static uint32_t rx_seq;
@@ -98,53 +113,55 @@ static void _aun_econet_rx_task(void *params)
     {
 
         // Get scout
-        size_t length = xMessageBufferReceive(econet_rx_frame_buffer, econet_packet, sizeof(econet_packet), portMAX_DELAY);
+        size_t length = _econet_rx(econet_packet, sizeof(econet_packet), portMAX_DELAY);
         if (length == 1)
         {
-            econet_rx_clear_bitmaps();
-            ESP_LOGI(TAG, "Econet RX shutdown");
-            xTaskNotifyGive(shutdown_notify_handle);
-            vTaskDelete(NULL);
+            continue; // Idle notification
         }
 
         // Store scout frame info
         if (length != 6)
         {
-            ESP_LOGW(TAG, "Expected scout but got something else from %d.%d to %d.%d. Discarding.",
+            ESP_LOGW(ECONETTAG, "Expected scout but got something else from %d.%d to %d.%d. Discarding.",
                      econet_hdr->src_stn, econet_hdr->src_net,
                      econet_hdr->dst_stn, econet_hdr->dst_net);
             continue;
         }
         memcpy(&scout, econet_packet, sizeof(scout));
-        ESP_LOGI(TAG, "Got scout from %d.%d to %d.%d control 0x%02x port 0x%02x.",
-                 scout.src_stn, scout.src_net,
-                 scout.dst_stn, scout.dst_net,
+        ESP_LOGI(ECONETTAG, "Got scout from %d.%d to %d.%d control 0x%02x port 0x%02x.",
+                 scout.src_net, scout.src_stn,
+                 scout.dst_net, scout.dst_stn,
                  scout.control, scout.port);
 
         // Get data packet
-        length = xMessageBufferReceive(econet_rx_frame_buffer, econet_packet, sizeof(econet_packet), 200);
+        length = _econet_rx(econet_packet, sizeof(econet_packet), portMAX_DELAY);
         if (length == 0)
         {
-            ESP_LOGW(TAG, "Timeout waiting for data packet");
+            ESP_LOGW(ECONETTAG, "Timeout waiting for data packet. No clock?");
             continue;
         }
-        ESP_LOGI(TAG, "Data packet %d bytes from %d.%d to %d.%d.",
+        if (length == 1)
+        {
+            ESP_LOGW(ECONETTAG, "Idle whilst getting data packet.");
+            continue;
+        }
+        ESP_LOGI(ECONETTAG, "Data packet %d bytes from %d.%d to %d.%d.",
                  length - 4,
-                 econet_hdr->src_stn, econet_hdr->src_net,
-                 econet_hdr->dst_stn, econet_hdr->dst_net);
+                 econet_hdr->src_net, econet_hdr->src_stn,
+                 econet_hdr->dst_net, econet_hdr->dst_stn);
 
         econet_station_t *econet_station = _get_econet_station_by_id(econet_hdr->src_stn);
         if (econet_station == NULL)
         {
             // FUTURE: Dynamically make a socket for it...
-            ESP_LOGW(TAG, "Econet station %d is not configured. Not forwarding packet.", econet_hdr->src_stn);
+            ESP_LOGW(ECONETTAG, "Econet station %d is not configured. Not forwarding packet.", econet_hdr->src_stn);
             continue;
         }
 
         aun_station_t *aun_station = _get_aun_station_by_id(econet_hdr->dst_stn);
         if (aun_station == NULL)
         {
-            ESP_LOGE(TAG, "AUN station %d is not configured but we accepted a packet for it!", econet_hdr->dst_stn);
+            ESP_LOGE(ECONETTAG, "AUN station %d is not configured but we accepted a packet for it!", econet_hdr->dst_stn);
             continue;
         }
 
@@ -236,7 +253,7 @@ static void _aun_udp_rx_process(econet_station_t *econet_station)
         xQueueSend(ack_queue, aun_rx_buffer, 0);
         return;
     default:
-        ESP_LOGW(TAG, "Received packet of unknown type 0x%02x", aun_rx_buffer[0]);
+        ESP_LOGW(TAG, "Received AUN packet of unknown type 0x%02x. Ignored.", aun_rx_buffer[0]);
         aunbridge_stats.rx_unknown_count++;
         return;
     }
@@ -245,7 +262,7 @@ static void _aun_udp_rx_process(econet_station_t *econet_station)
     aun_station_t *aun_station = _get_aun_station_by_port(ntohs(source_addr.sin_port));
     if (aun_station == NULL)
     {
-        ESP_LOGW(TAG, "Received packet but can't identify station ID");
+        ESP_LOGW(TAG, "Received AUN packet but can't identify station ID. Ignored.");
         return;
     }
 
@@ -269,8 +286,11 @@ static void _aun_udp_rx_process(econet_station_t *econet_station)
     // NOTE: We're not encountering out of order but if we do then we'll need a different strategy to reorder them.
     if (ack_seq != aun_station->last_acked_seq || !aun_station->last_acq_result)
     {
-        ESP_LOGI(TAG, "[%05d] Sending %d byte frame from %s to Econet %d.%d",
-                 ack_seq, len, inet_ntoa(source_addr.sin_addr), aun_rx_buffer[2], aun_rx_buffer[3]);
+        ESP_LOGI(TAG, "[%05d] Sending %d byte frame from %d.%d (%s) to Econet %d.%d",
+                 ack_seq, len,
+                 aun_station->network_id, aun_station->station_id,
+                 inet_ntoa(source_addr.sin_addr),
+                 econet_station->network_id, econet_station->station_id);
         aun_station->last_acq_result = econet_send(&aun_rx_buffer[2], len - 2);
         aun_station->last_acked_seq = ack_seq;
     }
@@ -304,7 +324,7 @@ static void _aun_udp_rx_process(econet_station_t *econet_station)
 static void _aun_udp_rx_task(void *params)
 {
 
-    ESP_LOGI(TAG, "Waiting for data...");
+    ESP_LOGI(TAG, "Waiting for AUN packets...");
 
     for (;;)
     {
@@ -333,7 +353,7 @@ static void _aun_udp_rx_task(void *params)
 
         if (FD_ISSET(rx_udp_ctl_pipe[0], &rfds))
         {
-            ESP_LOGI(TAG, "AUN RX shutdown");
+            ESP_LOGI(TAG, "AUN: RX shutdown");
             char tmp[1];
             read(rx_udp_ctl_pipe[0], &tmp, sizeof(tmp));
             xTaskNotifyGive(shutdown_notify_handle);
