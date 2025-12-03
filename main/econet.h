@@ -79,6 +79,7 @@ void econet_rx_start(void);
 void econet_tx_setup(void);
 void econet_tx_start(void);
 bool econet_rx_is_idle(void);
+void econet_tx_pre_go(void);
 typedef struct
 {
     char cmd;

@@ -16,9 +16,12 @@
 #include "freertos/task.h"
 #include "freertos/message_buffer.h"
 #include "driver/parlio_rx.h"
+#include "driver/gpio.h"
 
 #define ECONET_PRIVATE_API
 #include "econet.h"
+
+#define ECONET_IDLE_BITS 15
 
 MessageBufferHandle_t econet_rx_frame_buffer;
 
@@ -103,6 +106,7 @@ static inline void IRAM_ATTR _complete_frame()
                 .src_stn = rx_bytes[0],
                 .src_net = rx_bytes[1]};
             xQueueSendFromISR(tx_command_queue, &ack_cmd, NULL);
+            econet_tx_pre_go();
 
             portENTER_CRITICAL_ISR(&econet_rx_interrupt_lock);
             xMessageBufferSendFromISR(econet_rx_frame_buffer, rx_bytes, data_len, pdFALSE);
@@ -131,11 +135,13 @@ static inline void IRAM_ATTR _clk_bit(uint8_t c)
 
     if (c && !tx_is_in_progress)
     {
-        if (rx_idle_one_counter < 16)
+        if (rx_idle_one_counter < ECONET_IDLE_BITS)
         {
             rx_idle_one_counter++;
-            if (rx_idle_one_counter == 16)
+            if (rx_idle_one_counter == ECONET_IDLE_BITS)
             {
+                gpio_set_level(18, 1);
+
                 portENTER_CRITICAL_ISR(&econet_rx_interrupt_lock);
                 char idle_rx_cmd = 'I';
                 xMessageBufferSendFromISR(econet_rx_frame_buffer, &idle_rx_cmd, 1, NULL);
@@ -145,6 +151,9 @@ static inline void IRAM_ATTR _clk_bit(uint8_t c)
                 };
                 xQueueSendFromISR(tx_command_queue, &idle_cmd, NULL);
                 portYIELD_FROM_ISR(pdTRUE);
+
+                gpio_set_level(18, 0);
+
             }
         }
     }
@@ -237,7 +246,7 @@ static bool IRAM_ATTR _on_recv_callback(parlio_rx_unit_handle_t rx_unit, const p
 
 bool econet_rx_is_idle(void)
 {
-    return rx_idle_one_counter == 16;
+    return rx_idle_one_counter == ECONET_IDLE_BITS;
 }
 
 void econet_rx_setup(void)

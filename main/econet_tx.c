@@ -42,10 +42,40 @@ static TaskHandle_t tx_sender_task = NULL;
 static bool tx_sent_ack;
 
 // Outgoing frame
+static uint8_t DRAM_ATTR tx_flag_stream[8];
+static uint32_t tx_flag_stream_length;
 static size_t scout_bits_len;
 static uint8_t DRAM_ATTR scout_bits[512];
 static uint8_t tx_bits[16384];
 static size_t tx_bits_len;
+
+// Custom ParlIO driver
+static volatile bool is_flagstream_queued;
+void parlio_tx_go(parlio_tx_unit_handle_t tx_unit);
+esp_err_t parlio_tx_unit_pretransmit(parlio_tx_unit_handle_t tx_unit, const void *payload, size_t payload_bits, const parlio_transmit_config_t *config);
+void econet_tx_pre_go(void)
+{
+    tx_is_in_progress = true;
+    if (is_flagstream_queued)
+    {
+        parlio_tx_go(tx_unit);
+        is_flagstream_queued = false;
+    }
+}
+
+static esp_err_t _queue_flagstream()
+{
+    if (is_flagstream_queued)
+    {
+        return ESP_OK;
+    }
+    parlio_transmit_config_t flax_tx_cfg = {
+        .idle_value = 0x00,
+    };
+    esp_err_t ret = parlio_tx_unit_pretransmit(tx_unit, tx_flag_stream, tx_flag_stream_length * 8, &flax_tx_cfg);
+    is_flagstream_queued = true;
+    return ret;
+}
 
 static inline uint16_t IRAM_ATTR crc16_x25(const uint8_t *data, size_t len)
 {
@@ -183,19 +213,9 @@ size_t IRAM_ATTR _generate_flag_stream(uint8_t *bits, size_t bits_size, int numb
 static void IRAM_ATTR _tx_task(void *params)
 {
     bool is_data_ready = false;
-    uint8_t flag_stream[8];
     uint8_t ack_bits[128];
 
     tx_task = xTaskGetCurrentTaskHandle();
-
-    // Pre-calculate flag bitstream
-    uint32_t flag_stream_length = _generate_flag_stream(flag_stream, sizeof(flag_stream), 2);
-    if (flag_stream_length == 0)
-    {
-        ESP_LOGE(TAG, "Insufficient buffer for flag stream!");
-        vTaskDelete(NULL);
-        return;
-    }
 
     // Configure TX unit transmission parameters
     parlio_transmit_config_t transmit_config = {
@@ -204,6 +224,8 @@ static void IRAM_ATTR _tx_task(void *params)
 
     for (;;)
     {
+        _queue_flagstream();
+
         econet_tx_command_t cmd;
         if (xQueueReceive(tx_command_queue, &cmd, portMAX_DELAY) != pdTRUE)
         {
@@ -215,20 +237,11 @@ static void IRAM_ATTR _tx_task(void *params)
         // Generate ACK.
         if (cmd.cmd == 'A')
         {
-
-            tx_is_in_progress = true;
-            // Grab bus with some early flags
-            parlio_transmit_config_t flax_tx_cfg = {
-                .idle_value = 0xFF,
-            };
-            parlio_tx_unit_transmit(tx_unit, flag_stream, flag_stream_length * 8, &flax_tx_cfg);
-
             // Generate and send ack
             size_t tx_len = _generate_frame_bits(ack_bits, sizeof(ack_bits), &cmd.dst_stn, 4);
             ESP_ERROR_CHECK(parlio_tx_unit_transmit(tx_unit, ack_bits, tx_len * 8, &transmit_config));
             parlio_tx_unit_wait_all_done(tx_unit, -1);
             tx_is_in_progress = false;
-
             econet_stats.tx_ack_count++;
             continue;
         }
@@ -244,6 +257,7 @@ static void IRAM_ATTR _tx_task(void *params)
         }
 
         is_data_ready = false;
+        econet_tx_pre_go();
 
         // Send scout
         tx_is_in_progress = true;
@@ -262,7 +276,7 @@ static void IRAM_ATTR _tx_task(void *params)
         }
         if (cmd.cmd == 'I')
         {
-            ESP_LOGW(TAG, "Bus became idle whilst waiting for scout ack");
+            ESP_LOGW(TAG, "Bus became idle whilst waiting for scout ack (%d)", econet_rx_is_idle());
             tx_sent_ack = false;
             xTaskNotifyGive(tx_sender_task);
             econet_stats.rx_nack_count++;
@@ -316,10 +330,16 @@ bool econet_send(uint8_t *data, uint16_t length)
     // Notify sender task
     econet_tx_command_t cmd = {
         .cmd = 'S'};
-    xQueueSend(tx_command_queue, &cmd, portMAX_DELAY);
+    if (xQueueSend(tx_command_queue, &cmd, 1000) != pdTRUE)
+    {
+        ESP_LOGE(TAG, "Failed to post econet send command. This is a bug.");
+    }
 
-    ulTaskNotifyTake(pdTRUE, -1); // Wait for send completion (Full 4-way ACK or NACK)
-
+    // Wait for send completion (Full 4-way ACK or NACK)
+    if (ulTaskNotifyTake(pdTRUE, 1000) != pdTRUE)
+    {
+        ESP_LOGE(TAG, "Timeout waiting for send. This is a bug.");
+    };
     return tx_sent_ack;
 }
 
@@ -351,6 +371,15 @@ void econet_tx_setup(void)
     ESP_ERROR_CHECK(parlio_new_tx_unit(&tx_config, &tx_unit));
 
     tx_command_queue = xQueueCreate(8, sizeof(econet_tx_command_t));
+
+    // Pre-calculate flag bitstream
+    tx_flag_stream_length = _generate_flag_stream(tx_flag_stream, sizeof(tx_flag_stream), 2);
+    if (tx_flag_stream_length == 0)
+    {
+        ESP_LOGE(TAG, "Insufficient buffer for flag stream!");
+        vTaskDelete(NULL);
+        return;
+    }
 }
 
 void econet_tx_start(void)

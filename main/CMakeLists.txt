@@ -18,7 +18,8 @@ idf_component_register(SRCS
     "logging.c"
     "wifi.c"
     "config.c"
-    "main.c" 
+    "main.c"
+    "parlio_tx_econet.c"
     INCLUDE_DIRS ".")
 
 littlefs_create_partition_image(rootfs ../fsroot FLASH_IN_PROJECT)

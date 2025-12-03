@@ -216,6 +216,8 @@ static void _aun_econet_rx_task(void *params)
             }
 
             aunbridge_stats.tx_retry_count++;
+            ESP_LOGI(TAG, "Retry! %d remain", retries-1);
+
         }
 
         if (retries == 0)
