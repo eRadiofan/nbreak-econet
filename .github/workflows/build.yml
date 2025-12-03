@@ -36,7 +36,7 @@ jobs:
       - name: esp-idf build
         uses: espressif/esp-idf-ci-action@v1
         with:
-          esp_idf_version: v5.5
+          esp_idf_version: v5.5.1
           target: esp32c6
 
       - name: Upload build artifacts
