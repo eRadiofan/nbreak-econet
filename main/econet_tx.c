@@ -210,17 +210,23 @@ size_t IRAM_ATTR _generate_flag_stream(uint8_t *bits, size_t bits_size, int numb
     return stuff_ctx.byte_pos;
 }
 
+static void IRAM_ATTR _transmit_bits(const uint8_t *bits, size_t length)
+{
+    parlio_transmit_config_t transmit_config = {
+        .idle_value = 0x0,
+    };
+    tx_is_in_progress = true;
+    ESP_ERROR_CHECK(parlio_tx_unit_transmit(tx_unit, bits, length * 8, &transmit_config));
+    parlio_tx_unit_wait_all_done(tx_unit, -1);
+    tx_is_in_progress = false;
+}
+
 static void IRAM_ATTR _tx_task(void *params)
 {
     bool is_data_ready = false;
     uint8_t ack_bits[128];
 
     tx_task = xTaskGetCurrentTaskHandle();
-
-    // Configure TX unit transmission parameters
-    parlio_transmit_config_t transmit_config = {
-        .idle_value = 0x0,
-    };
 
     for (;;)
     {
@@ -239,9 +245,7 @@ static void IRAM_ATTR _tx_task(void *params)
         {
             // Generate and send ack
             size_t tx_len = _generate_frame_bits(ack_bits, sizeof(ack_bits), &cmd.dst_stn, 4);
-            ESP_ERROR_CHECK(parlio_tx_unit_transmit(tx_unit, ack_bits, tx_len * 8, &transmit_config));
-            parlio_tx_unit_wait_all_done(tx_unit, -1);
-            tx_is_in_progress = false;
+            _transmit_bits(ack_bits, tx_len);
             econet_stats.tx_ack_count++;
             continue;
         }
@@ -260,10 +264,7 @@ static void IRAM_ATTR _tx_task(void *params)
         econet_tx_pre_go();
 
         // Send scout
-        tx_is_in_progress = true;
-        ESP_ERROR_CHECK(parlio_tx_unit_transmit(tx_unit, scout_bits, scout_bits_len * 8, &transmit_config));
-        parlio_tx_unit_wait_all_done(tx_unit, -1);
-        tx_is_in_progress = false;
+        _transmit_bits(scout_bits, scout_bits_len);
 
         // Wait for ack
         if (xQueueReceive(tx_command_queue, &cmd, 200) == pdFALSE)
@@ -284,10 +285,7 @@ static void IRAM_ATTR _tx_task(void *params)
         }
 
         // Send payload frame
-        tx_is_in_progress = true;
-        ESP_ERROR_CHECK(parlio_tx_unit_transmit(tx_unit, tx_bits, tx_bits_len * 8, &transmit_config));
-        parlio_tx_unit_wait_all_done(tx_unit, -1);
-        tx_is_in_progress = false;
+        _transmit_bits(tx_bits, tx_bits_len);
 
         // Wait for ack
         if (xQueueReceive(tx_command_queue, &cmd, 200) == pdFALSE)
