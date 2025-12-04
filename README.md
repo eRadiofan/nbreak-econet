@@ -42,12 +42,12 @@ Final assembly complete with Econet plug ready for use:
 
 ## Upload the firmware to your ESP32
 
-Connect your ESP32 via USB (left socket) and identify the serial 
+Connect your ESP32 via USB (left socket) and identify the serial
 port your computer assigned it.
 
 Download the release zip you want to install from the releases on this page.
 
-esptool running in Python 3 is used to upload the firmware. Adjust 
+esptool running in Python 3 is used to upload the firmware. Adjust
 these steps for your envrionment as nescessary.
 
 ```shell
@@ -94,19 +94,29 @@ will not be loaded.
 
 The second table defines the AUN IP hosts that you want to present to the Econet network. N-Break will listen on the Econet for these station IDs and respond on their behalf, forwarding the traffic to the specified IP address and port.
 
-For communications to be successful, you need at least one entry in both tables. 
+For communications to be successful, you need at least one entry in both tables.
 
 ## AUN Fileserver Setup
 
-You can use aund as your Econet fileserver:
+A couple of AUN Fileservers have been tested. The best so far is the
+one included with PiEconetBridge. Despite the name, you can run the
+fileserver easily without needing either a Raspberry Pi or the Econet
+bridge hardware and it's very good.
 
-    https://github.com/sai2791/aund/
+An honorable mention goes to aund. This was what I developed the
+original code against. It was what first sent the Pacman2 binary to
+my real-life BBC over Econet bringing it to life with lights and
+sound. Alas it has some bugs which made me look for alternatives.
 
-Example configuration files are included in the contrib/ directory.
+Example configuration files for both are included in the contrib/ directory under peb and aund respectively.
 
 ## Building the firmware yourself
 
-Firmware is built and flashed using **idf.py** with the ESP-IDF toolchain.
+Firmware is built and flashed using **idf.py** from **version 5.5.1** of the ESP-IDF toolchain.
+
+Please note the ESP-IDF version number specified above. It is required because in order to reduce
+latency, we access internal private data of the PARLIO driver to give us better control of the
+DMA scheduling, FIFO loading and start/stop control of the peripheral.
 
 1. Install ESP-IDF:
    <a href="https://docs.espressif.com/projects/esp-idf/en/stable/esp32/get-started/index.html" target="_blank" rel="noopener noreferrer">https://docs.espressif.com/projects/esp-idf/en/stable/esp32/get-started/index.html</a>
