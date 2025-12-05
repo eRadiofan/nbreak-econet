@@ -35,7 +35,7 @@ typedef struct
 
 TaskHandle_t tx_task = NULL;
 QueueHandle_t tx_command_queue;
-bool tx_is_in_progress;
+volatile bool DRAM_ATTR tx_is_in_progress;
 
 static parlio_tx_unit_handle_t tx_unit;
 static TaskHandle_t tx_sender_task = NULL;
@@ -51,6 +51,7 @@ static size_t tx_bits_len;
 
 // Custom ParlIO driver
 static volatile bool is_flagstream_queued;
+void parlio_tx_neg_edge(parlio_tx_unit_handle_t tx_unit);
 void parlio_tx_go(parlio_tx_unit_handle_t tx_unit);
 esp_err_t parlio_tx_unit_pretransmit(parlio_tx_unit_handle_t tx_unit, const void *payload, size_t payload_bits, const parlio_transmit_config_t *config);
 void econet_tx_pre_go(void)
@@ -361,12 +362,18 @@ void econet_tx_setup(void)
             -1,
         },
         .output_clk_freq_hz = econet_cfg.clk_freq_hz,
-        .trans_queue_depth = 32,
+        .trans_queue_depth = 4,
         .max_transfer_size = 16384,
-        .sample_edge = PARLIO_SAMPLE_EDGE_POS,
+        .sample_edge = PARLIO_SAMPLE_EDGE_NEG,
         .bit_pack_order = PARLIO_BIT_PACK_ORDER_MSB,
     };
     ESP_ERROR_CHECK(parlio_new_tx_unit(&tx_config, &tx_unit));
+
+    // Hack: The .sample_edge parameter doesn't actually work.
+    // Whatever you set it to it always seems to make output changes on the POS edge
+    // So this function uses the GPIO matrix to invert the clock signal prior to
+    // delivery to the peripheral.
+    parlio_tx_neg_edge(tx_unit);
 
     tx_command_queue = xQueueCreate(8, sizeof(econet_tx_command_t));
 

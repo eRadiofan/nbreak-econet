@@ -50,10 +50,15 @@ typedef struct
     uint8_t dst_net;
     uint8_t src_stn;
     uint8_t src_net;
+} econet_hdr_t;
+
+typedef struct
+{
+    econet_hdr_t hdr;
     uint8_t control;
     uint8_t port;
     uint8_t data[0];
-} econet_hdr_t;
+} econet_scout_t;
 
 extern econet_stats_t econet_stats;
 extern MessageBufferHandle_t econet_rx_frame_buffer;
@@ -73,7 +78,7 @@ extern econet_config_t econet_cfg;
 extern QueueHandle_t tx_command_queue;
 extern portMUX_TYPE econet_rx_interrupt_lock;
 extern TaskHandle_t tx_task;
-extern DRAM_ATTR bool tx_is_in_progress;
+extern volatile bool tx_is_in_progress;
 void econet_rx_setup(void);
 void econet_rx_start(void);
 void econet_tx_setup(void);

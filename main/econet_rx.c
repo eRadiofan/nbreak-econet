@@ -27,7 +27,8 @@ MessageBufferHandle_t econet_rx_frame_buffer;
 
 static parlio_rx_unit_handle_t rx_unit;
 static parlio_rx_delimiter_handle_t rx_delimiter;
-static uint8_t rx_payload_dma_buffer[1];
+static uint8_t rx_payload_dma_buffer[16];
+
 static uint8_t _raw_shift_in;
 static uint8_t _recv_data_shift_in;
 static uint32_t _recv_data_bit;
@@ -252,8 +253,8 @@ bool econet_rx_is_idle(void)
 void econet_rx_setup(void)
 {
     parlio_rx_unit_config_t rx_config = {
-        .trans_queue_depth = 512,
-        .max_recv_size = sizeof(rx_payload_dma_buffer),
+        .trans_queue_depth = sizeof(rx_payload_dma_buffer),
+        .max_recv_size = 1,
         .data_width = 2,
         .clk_src = PARLIO_CLK_SRC_EXTERNAL,
         .ext_clk_freq_hz = econet_cfg.clk_freq_hz,
@@ -280,7 +281,7 @@ void econet_rx_setup(void)
         .sample_edge = PARLIO_SAMPLE_EDGE_POS,
         .bit_pack_order = PARLIO_BIT_PACK_ORDER_MSB,
         .timeout_ticks = 0,
-        .eof_data_len = sizeof(rx_payload_dma_buffer),
+        .eof_data_len = 1,
     };
     ESP_ERROR_CHECK(parlio_new_rx_soft_delimiter(&delimiter_cfg, &rx_delimiter));
 
@@ -302,7 +303,10 @@ void econet_rx_start(void)
         .flags = {
             .partial_rx_en = true,
         }};
-    ESP_ERROR_CHECK(parlio_rx_unit_receive(rx_unit, rx_payload_dma_buffer, sizeof(rx_payload_dma_buffer), &rx_cfg));
+
+    for (int i=0;i<sizeof(rx_payload_dma_buffer);i++) {
+        ESP_ERROR_CHECK(parlio_rx_unit_receive(rx_unit, &rx_payload_dma_buffer[i], 1 , &rx_cfg));
+    }
 }
 
 void econet_rx_clear_bitmaps(void)
