@@ -34,7 +34,7 @@ typedef struct
 } tx_bitstuff_ctx;
 
 TaskHandle_t tx_task = NULL;
-QueueHandle_t tx_command_queue;
+QueueHandle_t DRAM_ATTR tx_command_queue;
 volatile bool DRAM_ATTR tx_is_in_progress;
 
 static parlio_tx_unit_handle_t tx_unit;
@@ -54,7 +54,7 @@ static volatile bool is_flagstream_queued;
 void parlio_tx_neg_edge(parlio_tx_unit_handle_t tx_unit);
 void parlio_tx_go(parlio_tx_unit_handle_t tx_unit);
 esp_err_t parlio_tx_unit_pretransmit(parlio_tx_unit_handle_t tx_unit, const void *payload, size_t payload_bits, const parlio_transmit_config_t *config);
-void econet_tx_pre_go(void)
+void IRAM_ATTR econet_tx_pre_go(void)
 {
     tx_is_in_progress = true;
     if (is_flagstream_queued)

@@ -22,8 +22,13 @@
 
 static const char *TAG = "ws";
 
+#define MAX_WS_BROADCAST_SIZE 512
 #define MAX_WS_CLIENTS 4
 
+static MessageBufferHandle_t _broadcast_messages;
+static portMUX_TYPE _broadcast_messages_lock = portMUX_INITIALIZER_UNLOCKED;
+
+static bool _ws_init_complete;
 static int s_ws_fds[MAX_WS_CLIENTS];
 
 static void ws_clients_init(void)
@@ -61,40 +66,65 @@ static void ws_client_remove(int fd)
     }
 }
 
-static esp_err_t send_ok_response(int request_id, int fd)
+esp_err_t _ws_send(httpd_req_t *req, const char *json)
+{
+    if (!http_server || !json)
+    {
+        return ESP_FAIL;
+    }
+
+    httpd_ws_frame_t frame = {
+        .final = true,
+        .fragmented = false,
+        .type = HTTPD_WS_TYPE_TEXT,
+        .payload = (uint8_t *)json,
+        .len = strlen(json),
+    };
+
+    esp_err_t ret = httpd_ws_send_frame(req, &frame);
+    if (ret != ESP_OK)
+    {
+        int fd = httpd_req_to_sockfd(req);
+        ESP_LOGW(TAG, "Async send failed to fd=%d: %d, dropping client", fd, ret);
+        ws_client_remove(fd);
+    }
+    return ret;
+}
+
+static esp_err_t send_ok_response(httpd_req_t *req, int request_id)
 {
     char response[128];
     snprintf(response, sizeof(response),
              "{\"type\":\"response\",\"id\": %d, \"ok\":true}",
              request_id);
-    return http_ws_send(fd, response);
+    return _ws_send(req, response);
 }
 
-static esp_err_t send_err_response(int request_id, int fd, const char *msg)
+static esp_err_t send_err_response(httpd_req_t *req, int request_id, const char *msg)
 {
     char response[128];
     snprintf(response, sizeof(response),
              "{\"type\":\"response\",\"id\": %d, \"error\":\"%s\"}",
              request_id, msg);
-    return http_ws_send(fd, response);
+    return _ws_send(req, response);
 }
 
-static esp_err_t _ws_save_econet(int request_id, const cJSON *payload, int fd)
+static esp_err_t _ws_save_econet(httpd_req_t *req, int request_id, const cJSON *payload)
 {
     const cJSON *settings = cJSON_GetObjectItemCaseSensitive(payload, "settings");
     if (!cJSON_IsObject(settings))
     {
-        return send_err_response(request_id, fd, "Missing settings");
+        return send_err_response(req, request_id, "Missing settings");
     }
 
     config_save_econet(settings);
 
     aunbridge_reconfigure();
 
-    return send_ok_response(request_id, fd);
+    return send_ok_response(req, request_id);
 }
 
-static esp_err_t _ws_get_econet(int request_id, const cJSON *payload, int fd)
+static esp_err_t _ws_get_econet(httpd_req_t *req, int request_id, const cJSON *payload)
 {
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "type", "response");
@@ -108,7 +138,7 @@ static esp_err_t _ws_get_econet(int request_id, const cJSON *payload, int fd)
     }
 
     char *response = cJSON_PrintUnformatted(root);
-    esp_err_t err = http_ws_send(fd, response);
+    esp_err_t err = _ws_send(req, response);
 
     free(response);
     cJSON_Delete(root);
@@ -122,12 +152,12 @@ static void reconfig_wifi(TimerHandle_t t)
     config_save_wifi();
 }
 
-static esp_err_t _ws_save_wifi(int request_id, const cJSON *payload, int fd)
+static esp_err_t _ws_save_wifi(httpd_req_t *req, int request_id, const cJSON *payload)
 {
     const cJSON *settings = cJSON_GetObjectItemCaseSensitive(payload, "settings");
     if (!cJSON_IsObject(settings))
     {
-        return send_err_response(request_id, fd, "Missing settings");
+        return send_err_response(req, request_id, "Missing settings");
     }
 
     const cJSON *ssid = cJSON_GetObjectItemCaseSensitive(settings, "ssid");
@@ -151,10 +181,10 @@ static esp_err_t _ws_save_wifi(int request_id, const cJSON *payload, int fd)
                  password->valuestring);
     }
 
-    esp_err_t ret = send_ok_response(request_id, fd);
+    esp_err_t ret = send_ok_response(req, request_id);
     if (ret == ESP_OK)
     {
-        ESP_LOGW(TAG, "Reconfiguring WiFi...", fd);
+        ESP_LOGW(TAG, "Reconfiguring WiFi...");
         TimerHandle_t t = xTimerCreate(
             "wifi_reconfig",
             pdMS_TO_TICKS(3000),
@@ -166,7 +196,7 @@ static esp_err_t _ws_save_wifi(int request_id, const cJSON *payload, int fd)
     return ret;
 }
 
-static esp_err_t _ws_get_wifi(int request_id, const cJSON *payload, int fd)
+static esp_err_t _ws_get_wifi(httpd_req_t *req, int request_id, const cJSON *payload)
 {
     char response[256];
     snprintf(response, sizeof(response),
@@ -179,15 +209,15 @@ static esp_err_t _ws_get_wifi(int request_id, const cJSON *payload, int fd)
              request_id,
              config_wifi.sta.sta.ssid,
              config_wifi.sta_enabled ? "true" : "false");
-    return http_ws_send(fd, response);
+    return _ws_send(req, response);
 }
 
-static esp_err_t _ws_save_wifi_ap(int request_id, const cJSON *payload, int fd)
+static esp_err_t _ws_save_wifi_ap(httpd_req_t *req, int request_id, const cJSON *payload)
 {
     const cJSON *settings = cJSON_GetObjectItemCaseSensitive(payload, "settings");
     if (!cJSON_IsObject(settings))
     {
-        return send_err_response(request_id, fd, "Missing settings");
+        return send_err_response(req, request_id, "Missing settings");
     }
 
     const cJSON *ssid = cJSON_GetObjectItemCaseSensitive(settings, "ssid");
@@ -196,7 +226,7 @@ static esp_err_t _ws_save_wifi_ap(int request_id, const cJSON *payload, int fd)
 
     if (!cJSON_IsString(ssid) || !cJSON_IsString(password) || !cJSON_IsBool(is_enabled))
     {
-        return send_err_response(request_id, fd, "Missing or incorrect fields");
+        return send_err_response(req, request_id, "Missing or incorrect fields");
     }
 
     snprintf((char *)config_wifi.ap.ap.ssid,
@@ -219,10 +249,10 @@ static esp_err_t _ws_save_wifi_ap(int request_id, const cJSON *payload, int fd)
 
     config_wifi.ap_enabled = is_enabled->valueint ? true : false;
 
-    esp_err_t ret = send_ok_response(request_id, fd);
+    esp_err_t ret = send_ok_response(req, request_id);
     if (ret == ESP_OK)
     {
-        ESP_LOGW(TAG, "Reconfiguring WiFi...", fd);
+        ESP_LOGW(TAG, "Reconfiguring WiFi...");
         TimerHandle_t t = xTimerCreate(
             "wifi_reconfig",
             pdMS_TO_TICKS(3000),
@@ -234,7 +264,7 @@ static esp_err_t _ws_save_wifi_ap(int request_id, const cJSON *payload, int fd)
     return ret;
 }
 
-static esp_err_t _ws_get_wifi_ap(int request_id, const cJSON *payload, int fd)
+static esp_err_t _ws_get_wifi_ap(httpd_req_t *req, int request_id, const cJSON *payload)
 {
     char response[256];
     snprintf(response, sizeof(response),
@@ -247,7 +277,7 @@ static esp_err_t _ws_get_wifi_ap(int request_id, const cJSON *payload, int fd)
              request_id,
              config_wifi.ap.ap.ssid,
              config_wifi.ap_enabled ? "true" : "false");
-    return http_ws_send(fd, response);
+    return _ws_send(req, response);
 }
 
 static void factory_reset_cb(TimerHandle_t t)
@@ -256,12 +286,12 @@ static void factory_reset_cb(TimerHandle_t t)
     nvs_flash_init();
     esp_restart();
 }
-static esp_err_t ws_handle_factory_reset(int request_id, const cJSON *payload, int fd)
+static esp_err_t ws_handle_factory_reset(httpd_req_t *req, int request_id, const cJSON *payload)
 {
-    esp_err_t ret = send_ok_response(request_id, fd);
+    esp_err_t ret = send_ok_response(req, request_id);
     if (ret == ESP_OK)
     {
-        ESP_LOGW(TAG, "Factory reset...", fd);
+        ESP_LOGW(TAG, "Factory reset...");
         TimerHandle_t t = xTimerCreate(
             "factory_reset",
             pdMS_TO_TICKS(3000),
@@ -277,12 +307,12 @@ static void _reboot_callback(TimerHandle_t t)
 {
     esp_restart();
 }
-static esp_err_t ws_handle_reboot(int request_id, const cJSON *payload, int fd)
+static esp_err_t ws_handle_reboot(httpd_req_t *req, int request_id, const cJSON *payload)
 {
-    esp_err_t ret = send_ok_response(request_id, fd);
+    esp_err_t ret = send_ok_response(req, request_id);
     if (ret == ESP_OK)
     {
-        ESP_LOGW(TAG, "Rebooting...", fd);
+        ESP_LOGW(TAG, "Rebooting...");
         TimerHandle_t t = xTimerCreate(
             "reboot_cb",
             pdMS_TO_TICKS(3000),
@@ -294,12 +324,12 @@ static esp_err_t ws_handle_reboot(int request_id, const cJSON *payload, int fd)
     return ret;
 }
 
-static esp_err_t _ws_save_econet_clock(int request_id, const cJSON *payload, int fd)
+static esp_err_t _ws_save_econet_clock(httpd_req_t *req, int request_id, const cJSON *payload)
 {
     const cJSON *settings = cJSON_GetObjectItemCaseSensitive(payload, "settings");
     if (!cJSON_IsObject(settings))
     {
-        return send_err_response(request_id, fd, "Missing settings");
+        return send_err_response(req, request_id, "Missing settings");
     }
 
     const cJSON *mode = cJSON_GetObjectItemCaseSensitive(settings, "mode");
@@ -308,12 +338,12 @@ static esp_err_t _ws_save_econet_clock(int request_id, const cJSON *payload, int
 
     if (!cJSON_IsString(mode) || !cJSON_IsNumber(freq) || !cJSON_IsNumber(duty))
     {
-        return send_err_response(request_id, fd, "Missing or incorrect fields");
+        return send_err_response(req, request_id, "Missing or incorrect fields");
     }
 
     if (duty->valueint < 1 || duty->valueint > 100 || freq->valueint < 50000 || freq->valueint > 300000)
     {
-        return send_err_response(request_id, fd, "Unacceptable clock values");
+        return send_err_response(req, request_id, "Unacceptable clock values");
     }
 
     config_econet_clock_t clock_cfg = {
@@ -326,10 +356,10 @@ static esp_err_t _ws_save_econet_clock(int request_id, const cJSON *payload, int
 
     econet_clock_reconfigure();
 
-    return send_ok_response(request_id, fd);
+    return send_ok_response(req, request_id);
 }
 
-static esp_err_t _ws_get_econet_clock(int request_id, const cJSON *payload, int fd)
+static esp_err_t _ws_get_econet_clock(httpd_req_t *req, int request_id, const cJSON *payload)
 {
     config_econet_clock_t clock_cfg;
     config_load_econet_clock(&clock_cfg);
@@ -346,7 +376,7 @@ static esp_err_t _ws_get_econet_clock(int request_id, const cJSON *payload, int 
              clock_cfg.mode == ECONET_CLOCK_INTERNAL ? "internal" : "external",
              clock_cfg.frequency_hz,
              clock_cfg.duty_pc);
-    return http_ws_send(fd, response);
+    return _ws_send(req, response);
 }
 
 static const struct
@@ -367,21 +397,21 @@ static const struct
 
 };
 
-static esp_err_t ws_dispatch(const char *type, int id, const cJSON *payload, int fd)
+static esp_err_t _ws_dispatch(httpd_req_t *req, const char *type, int id, const cJSON *payload)
 {
     for (size_t i = 0; i < sizeof(ws_routes) / sizeof(ws_routes[0]); i++)
     {
         if (strcmp(type, ws_routes[i].type) == 0)
         {
-            return ws_routes[i].handler(id, payload, fd);
+            return ws_routes[i].handler(req, id, payload);
         }
     }
 
-    ESP_LOGW(TAG, "Unknown WS type '%s' from fd=%d", type, fd);
+    ESP_LOGW(TAG, "Unknown WS type '%s' from fd=%d", type, httpd_req_to_sockfd(req));
     return ESP_FAIL;
 }
 
-static esp_err_t ws_handle_message(const char *msg, size_t len, int fd)
+static esp_err_t _ws_handle_message(httpd_req_t *req, const char *msg, size_t len)
 {
     if (len == 0)
     {
@@ -391,8 +421,8 @@ static esp_err_t ws_handle_message(const char *msg, size_t len, int fd)
     cJSON *root = cJSON_ParseWithLength(msg, len);
     if (!root)
     {
-        ESP_LOGW(TAG, "Invalid JSON from fd=%d", fd);
-        return send_err_response(0, fd, "Invalid JSON");
+        ESP_LOGW(TAG, "Invalid JSON from fd=%d", httpd_req_to_sockfd(req));
+        return send_err_response(req, 0, "Invalid JSON");
     }
 
     cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
@@ -400,12 +430,12 @@ static esp_err_t ws_handle_message(const char *msg, size_t len, int fd)
 
     if (!cJSON_IsString(type) || !cJSON_IsNumber(id))
     {
-        ESP_LOGW(TAG, "JSON 'type' or 'id' error from fd=%d", fd);
+        ESP_LOGW(TAG, "JSON 'type' or 'id' error from fd=%d", httpd_req_to_sockfd(req));
         cJSON_Delete(root);
-        return send_err_response(0, fd, "Missing or incorrect type or ID");
+        return send_err_response(req, 0, "Missing or incorrect type or ID");
     }
 
-    esp_err_t ret = ws_dispatch(type->valuestring, id->valueint, root, fd);
+    esp_err_t ret = _ws_dispatch(req, type->valuestring, id->valueint, root);
 
     cJSON_Delete(root);
     return ret;
@@ -469,67 +499,79 @@ esp_err_t http_ws_handler(httpd_req_t *req)
 
     buf[ws_pkt.len] = 0; // null-terminate
 
-    ret = ws_handle_message((char *)buf, ws_pkt.len, fd);
+    ret = _ws_handle_message(req, (char *)buf, ws_pkt.len);
 
     free(buf);
     return ret;
 }
 
-esp_err_t http_ws_send(int fd, const char *json)
+static void _async_send_worker(void *arg)
 {
-    if (!http_server || !json)
-    {
-        return ESP_FAIL;
-    }
+    uint8_t msg[MAX_WS_BROADCAST_SIZE];
 
-    httpd_ws_frame_t frame = {
-        .final = true,
-        .fragmented = false,
-        .type = HTTPD_WS_TYPE_TEXT,
-        .payload = (uint8_t *)json,
-        .len = strlen(json),
-    };
-
-    esp_err_t ret = httpd_ws_send_frame_async(http_server, fd, &frame);
-    if (ret != ESP_OK)
+    while (1)
     {
-        ESP_LOGW(TAG, "Async send failed to fd=%d: %d, dropping client", fd, ret);
-        ws_client_remove(fd);
+        size_t msg_len = xMessageBufferReceive(_broadcast_messages, msg, sizeof(msg), 0);
+        if (msg_len == 0)
+        {
+            return;
+        }
+
+        httpd_ws_frame_t frame = {
+            .type = HTTPD_WS_TYPE_TEXT,
+            .payload = msg,
+            .len = msg_len,
+        };
+
+        for (int i = 0; i < MAX_WS_CLIENTS; i++)
+        {
+            int fd = s_ws_fds[i];
+            if (fd < 0)
+            {
+                continue;
+            }
+
+            esp_err_t ret = httpd_ws_send_frame_async(http_server, fd, &frame);
+            if (ret != ESP_OK)
+            {
+                ESP_LOGW(TAG, "Failed to send broadcast to fd=%d", fd);
+            }
+        }
     }
-    return ret;
 }
 
 esp_err_t http_ws_broadcast_json(const char *json)
 {
-    if (!http_server || !json)
+
+    if (!_ws_init_complete || !json)
     {
         return ESP_FAIL;
     }
 
-    httpd_ws_frame_t frame = {
-        .final = true,
-        .fragmented = false,
-        .type = HTTPD_WS_TYPE_TEXT,
-        .payload = (uint8_t *)json,
-        .len = strlen(json),
-    };
-
-    esp_err_t last_err = ESP_OK;
-
-    for (int i = 0; i < MAX_WS_CLIENTS; i++)
+    int msg_len = strlen(json);
+    if (msg_len > MAX_WS_BROADCAST_SIZE)
     {
-        int fd = s_ws_fds[i];
-        if (fd < 0)
-            continue;
-
-        esp_err_t ret = httpd_ws_send_frame_async(http_server, fd, &frame);
-        if (ret != ESP_OK)
-        {
-            last_err = ret;
-        }
+        ESP_LOGW(TAG, "Couldn't send broadcast message. Too long.");
+        return ESP_FAIL;
+    }
+    if (msg_len==0) {
+        return ESP_FAIL;
     }
 
-    return last_err;
+    portENTER_CRITICAL(&_broadcast_messages_lock);
+    bool is_empty = xStreamBufferNextMessageLengthBytes(_broadcast_messages) > 0;
+    size_t len_written = xMessageBufferSend(_broadcast_messages, json, msg_len, 0);
+    portEXIT_CRITICAL(&_broadcast_messages_lock);
+    if (len_written==0)
+    {
+        return ESP_FAIL;
+    }
+
+    if (is_empty)
+    {
+        return httpd_queue_work(http_server, _async_send_worker, NULL);
+    }
+    return ESP_OK;
 }
 
 void http_ws_close_handler(httpd_handle_t hd, int sockfd)
@@ -540,5 +582,7 @@ void http_ws_close_handler(httpd_handle_t hd, int sockfd)
 
 void http_ws_init(void)
 {
+    _broadcast_messages = xMessageBufferCreate(MAX_WS_BROADCAST_SIZE * 4);
     ws_clients_init();
+    _ws_init_complete = true;
 }

@@ -133,7 +133,7 @@ static void parlio_tx_queue_transaction(parlio_tx_unit_t *tx_unit, parlio_tx_tra
     //  }
 }
 
-void parlio_tx_go(parlio_tx_unit_handle_t tx_unit)
+void IRAM_ATTR parlio_tx_go(parlio_tx_unit_handle_t tx_unit)
 {
     parlio_hal_context_t *hal = &tx_unit->base.group->hal;
     // turn on the core clock after we start the TX unit

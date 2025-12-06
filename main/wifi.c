@@ -100,5 +100,7 @@ void wifi_start(void)
 
     ESP_ERROR_CHECK(esp_wifi_start());
 
+    esp_wifi_set_ps(WIFI_PS_NONE);
+
     wifi_reconfigure();
 }

@@ -23,22 +23,22 @@
 
 #define ECONET_IDLE_BITS 15
 
-MessageBufferHandle_t econet_rx_frame_buffer;
+MessageBufferHandle_t DRAM_ATTR econet_rx_frame_buffer;
 
 static parlio_rx_unit_handle_t rx_unit;
 static parlio_rx_delimiter_handle_t rx_delimiter;
-static uint8_t rx_payload_dma_buffer[16];
+static uint8_t DRAM_ATTR rx_payload_dma_buffer[16];
 
-static uint8_t _raw_shift_in;
-static uint8_t _recv_data_shift_in;
-static uint32_t _recv_data_bit;
-static uint32_t is_frame_active;
-static uint8_t rx_bytes[2048];
-static uint16_t rx_frame_len;
-static uint16_t rx_crc;
+static uint8_t DRAM_ATTR _raw_shift_in;
+static uint8_t DRAM_ATTR _recv_data_shift_in;
+static uint32_t DRAM_ATTR _recv_data_bit;
+static uint32_t DRAM_ATTR is_frame_active;
+static uint8_t DRAM_ATTR rx_bytes[2048];
+static uint16_t DRAM_ATTR rx_frame_len;
+static uint16_t DRAM_ATTR rx_crc;
 static uint8_t DRAM_ATTR rx_idle_one_counter;
 
-portMUX_TYPE econet_rx_interrupt_lock = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE DRAM_ATTR econet_rx_interrupt_lock = portMUX_INITIALIZER_UNLOCKED;
 
 typedef struct
 {
@@ -141,8 +141,6 @@ static inline void IRAM_ATTR _clk_bit(uint8_t c)
             rx_idle_one_counter++;
             if (rx_idle_one_counter == ECONET_IDLE_BITS)
             {
-                gpio_set_level(18, 1);
-
                 portENTER_CRITICAL_ISR(&econet_rx_interrupt_lock);
                 char idle_rx_cmd = 'I';
                 xMessageBufferSendFromISR(econet_rx_frame_buffer, &idle_rx_cmd, 1, NULL);
@@ -152,9 +150,6 @@ static inline void IRAM_ATTR _clk_bit(uint8_t c)
                 };
                 xQueueSendFromISR(tx_command_queue, &idle_cmd, NULL);
                 portYIELD_FROM_ISR(pdTRUE);
-
-                gpio_set_level(18, 0);
-
             }
         }
     }
@@ -296,7 +291,6 @@ void econet_rx_setup(void)
 void econet_rx_start(void)
 {
     ESP_ERROR_CHECK(parlio_rx_unit_enable(rx_unit, true));
-    ESP_ERROR_CHECK(parlio_rx_soft_delimiter_start_stop(rx_unit, rx_delimiter, true));
 
     parlio_receive_config_t rx_cfg = {
         .delimiter = rx_delimiter,
@@ -307,6 +301,9 @@ void econet_rx_start(void)
     for (int i=0;i<sizeof(rx_payload_dma_buffer);i++) {
         ESP_ERROR_CHECK(parlio_rx_unit_receive(rx_unit, &rx_payload_dma_buffer[i], 1 , &rx_cfg));
     }
+
+    ESP_ERROR_CHECK(parlio_rx_soft_delimiter_start_stop(rx_unit, rx_delimiter, true));
+
 }
 
 void econet_rx_clear_bitmaps(void)

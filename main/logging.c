@@ -90,5 +90,5 @@ void logging_init(void)
 {
     s_log_queue = xQueueCreate(32, sizeof(log_msg_t));
     original_logger = esp_log_set_vprintf(_logging_func);
-    xTaskCreate(_log_to_ws, "logging", 4096, NULL, 5, NULL);
+    xTaskCreate(_log_to_ws, "logging", 8192, NULL, 5, NULL);
 }

@@ -75,7 +75,6 @@ static esp_err_t _file_handler(httpd_req_t *req)
 
 httpd_handle_t http_server_start(void)
 {
-    http_ws_init();
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.ctrl_port = 40404; // We want the default for AUN (Econet/IP)
@@ -103,8 +102,11 @@ httpd_handle_t http_server_start(void)
         return NULL;
     }
 
+    http_ws_init();
+
     httpd_register_uri_handler(http_server, &ws);
     httpd_register_uri_handler(http_server, &file_server);
+    
     return http_server;
 
 }
