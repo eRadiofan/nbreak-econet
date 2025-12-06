@@ -100,6 +100,8 @@ void app_main(void)
 
     aunbrige_start();
 
+    esp_intr_dump(stderr);
+
     static char buf[512];
     for (int i = 0;; i++)
     {
