@@ -14,3 +14,30 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 project(EconetWiFi)
 
+# Build web interface
+option(WEB_BUILD "Enable building of web pages" ON)
+if (WEB_BUILD)
+    find_program(PNPM_EXECUTABLE NAMES pnpm)
+    if (NOT PNPM_EXECUTABLE)
+        message(FATAL_ERROR 
+"
+=================================================
+  Building the Web Interface requires pnpm and 
+  NodeJS. WEB_BUILD=ON but pnpm was not found.
+  
+  You can either:
+    * Install NodeJS >=22 and pnpm and build the web interface locally or;
+    * Run the build with -DWEB_BUILD=OFF and use the pre-built web
+      interface from the git release corresponding to this source 
+      tree. If you do that, unzip it into rootfs.
+=================================================
+")
+    endif()
+
+    add_custom_target(build_web ALL
+        COMMAND pnpm build
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/web
+    )
+    add_dependencies(littlefs_rootfs_bin build_web)
+endif()
+
