@@ -1,5 +1,9 @@
 # Econet Sigrok Decoder
 
+Author: Paul G. Banks <https://paulbanks.org/projects/econet>
+
+![Example decode](docs/SigrokDecode.png)
+
 To install, copy the econet directory (including the directory) to ~/.local/share/libsigrokdecode/decoders (or wherever the decoders live on your platform)
 
 ## Use
