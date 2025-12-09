@@ -534,6 +534,7 @@ static void _async_send_worker(void *arg)
             esp_err_t ret = httpd_ws_send_frame_async(http_server, fd, &frame);
             if (ret != ESP_OK)
             {
+                ws_client_remove(fd);
                 ESP_LOGW(TAG, "Failed to send broadcast to fd=%d", fd);
             }
         }
