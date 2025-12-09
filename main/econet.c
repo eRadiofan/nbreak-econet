@@ -73,6 +73,13 @@ void econet_clock_reconfigure(void)
     {
         gpio_set_level(econet_cfg.clk_oe_pin, 0);
         ledc_set_duty(LEDC_LOW_SPEED_MODE, ECONET_CLK_PWM_CHANNEL, 0);
+        gpio_config_t io_conf = {
+            .pin_bit_mask = (1ULL << econet_cfg.clk_output_pin),
+            .mode = GPIO_MODE_INPUT,
+            .pull_down_en = 0,
+            .pull_up_en = 0,
+            .intr_type = GPIO_INTR_DISABLE};
+        ESP_ERROR_CHECK(gpio_config(&io_conf));
     }
 
     ESP_ERROR_CHECK(ledc_update_duty(LEDC_LOW_SPEED_MODE, ECONET_CLK_PWM_CHANNEL));
