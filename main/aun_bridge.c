@@ -155,7 +155,7 @@ static void _aun_econet_rx_task(void *params)
         }
         else if (econet_pkt.length < 6)
         {
-            ESP_LOGW(ECONETTAG, "Unexpected short frame discarded");
+            ESP_LOGW(ECONETTAG, "Unexpected short scout frame (len=%d) discarded", econet_pkt.length);
             continue;
         }
         memcpy(&scout, econet_pkt.data + 4, sizeof(scout));
@@ -173,7 +173,7 @@ static void _aun_econet_rx_task(void *params)
                      scout.hdr.src_net, scout.hdr.src_stn, scout.hdr.dst_net, scout.hdr.dst_stn, scout.control, scout.port);
             continue;
         }
-        else if (econet_pkt.length == 1)
+        else if (econet_pkt.type == 'I')
         {
             ESP_LOGW(ECONETTAG, "Idle whilst getting data packet from %d.%d to %d.%d (ctrl=0x%x, port=0x%x)",
                      scout.hdr.src_net, scout.hdr.src_stn, scout.hdr.dst_net, scout.hdr.dst_stn, scout.control, scout.port);

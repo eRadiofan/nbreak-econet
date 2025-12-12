@@ -29,7 +29,7 @@ void econet_clock_setup(void)
 
     // Clock OE and debug pin 18
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << econet_cfg.clk_oe_pin) | (1ULL << 18),
+        .pin_bit_mask = (1ULL << econet_cfg.clk_oe_pin) | (1ULL << 18) | (1ULL << 19),
         .mode = GPIO_MODE_OUTPUT,
         .pull_down_en = 0,
         .pull_up_en = 0,

@@ -24,7 +24,7 @@
 #include "econet.h"
 
 #define ECONET_PARLIO_WIDTH 2
-#define ECONET_FLAGSTREAM_PADDING 2
+#define ECONET_FLAGSTREAM_PADDING 6
 
 typedef struct
 {
@@ -160,6 +160,10 @@ size_t IRAM_ATTR _generate_frame_bits(uint8_t *bits, size_t bits_size, const uin
         .bits_size = bits_size,
     };
 
+    // Double flag - this is because the handover from flagstream to
+    // our stream is problematic. Future version we'll customise the
+    // PARLIO driver fully to get rid of this nonsense
+    _add_byte_unstuffed(&stuff_ctx, 0x7e);
     _add_byte_unstuffed(&stuff_ctx, 0x7e);
 
     for (int i = 0; i < payload_length; i++)
@@ -268,6 +272,7 @@ static void IRAM_ATTR _tx_task(void *params)
 
         // Send scout
         _transmit_bits(scout_bits, scout_bits_len);
+        _queue_flagstream();
 
         // Wait for ack
         if (xQueueReceive(tx_command_queue, &cmd, 200) == pdFALSE)
@@ -368,16 +373,10 @@ void econet_tx_setup(void)
         .output_clk_freq_hz = econet_cfg.clk_freq_hz,
         .trans_queue_depth = 4,
         .max_transfer_size = sizeof(tx_bits),
-        .sample_edge = PARLIO_SAMPLE_EDGE_NEG,
+        .sample_edge = PARLIO_SAMPLE_EDGE_POS, // This is no-op - we're not using the output clock. See econet_tx_start.
         .bit_pack_order = PARLIO_BIT_PACK_ORDER_MSB,
     };
     ESP_ERROR_CHECK(parlio_new_tx_unit(&tx_config, &tx_unit));
-
-    // Hack: The .sample_edge parameter doesn't actually work.
-    // Whatever you set it to it always seems to make output changes on the POS edge
-    // So this function uses the GPIO matrix to invert the clock signal prior to
-    // delivery to the peripheral.
-    parlio_tx_neg_edge(tx_unit);
 
     tx_command_queue = xQueueCreate(8, sizeof(econet_tx_command_t));
 
@@ -393,6 +392,12 @@ void econet_tx_setup(void)
 
 void econet_tx_start(void)
 {
+    // Hack: The .sample_edge parameter doesn't actually work.
+    // Whatever you set it to it always seems to make output changes on the POS edge
+    // So this function uses the GPIO matrix to invert the clock signal prior to
+    // delivery to the peripheral.
+    parlio_tx_neg_edge(tx_unit);
+
     ESP_ERROR_CHECK(parlio_tx_unit_enable(tx_unit));
     xTaskCreate(_tx_task, "adlc_tx", 8192, NULL, 24, NULL);
 }
