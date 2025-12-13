@@ -48,7 +48,7 @@ typedef struct
     uint8_t network_id;
     uint16_t udp_port;
     uint32_t last_acked_seq;
-    bool last_acq_result;
+    econet_acktype_t last_tx_result;
 } aun_station_t;
 static aun_station_t aun_stations[20];
 
@@ -344,7 +344,7 @@ static void _aun_udp_rx_process(econet_station_t *econet_station)
 
     // Send to Beeb (but only if we didn't get acknowledgement before for this packet.)
     // NOTE: We're not encountering out of order but if we do then we'll need a different strategy to reorder them.
-    if (ack_seq != aun_station->last_acked_seq || !aun_station->last_acq_result)
+    if (ack_seq != aun_station->last_acked_seq || aun_station->last_tx_result == ECONET_NACK)
     {
         ESP_LOGI(TAG, "[%05d] Sending %d byte frame from %d.%d (%s) to Econet %d.%d",
                  ack_seq, len,
@@ -352,16 +352,16 @@ static void _aun_udp_rx_process(econet_station_t *econet_station)
                  inet_ntoa(source_addr.sin_addr),
                  econet_station->network_id, econet_station->station_id);
 
-        aun_station->last_acq_result = econet_send(&aun_rx_buffer[2], len - 2);
+        aun_station->last_tx_result = econet_send(&aun_rx_buffer[2], len - 2);
         aun_station->last_acked_seq = ack_seq;
     }
     else
     {
-        ESP_LOGI(TAG, "[%05d] Re-acknowledging duplicate (ack=%d)", ack_seq, aun_station->last_acq_result);
+        ESP_LOGI(TAG, "[%05d] Re-acknowledging duplicate (Econet ack was %d)", ack_seq, aun_station->last_tx_result);
     }
 
     // Send AUN ack/nack
-    if (aun_station->last_acq_result)
+    if (aun_station->last_tx_result==ECONET_ACK)
     {
         hdr.transaction_type = AUN_TYPE_ACK;
         aunbridge_stats.tx_ack_count++;
@@ -454,7 +454,7 @@ static esp_err_t _alloc_aun_station(config_aun_station_t *cfg)
     station->network_id = cfg->network_id;
     station->udp_port = cfg->udp_port;
     station->last_acked_seq = UINT32_MAX;
-    station->last_acq_result = false;
+    station->last_tx_result = ECONET_NACK;
     return ESP_OK;
 }
 

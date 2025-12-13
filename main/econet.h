@@ -21,6 +21,40 @@
 
 typedef void (*econet_frame_callback)(uint8_t *data, uint16_t length, void *user_ctx);
 
+/*** Econet acknowledgement types.
+ *
+ * Econet defines a single positive acknowledgement packet (ACK). A negative
+ * acknowledgement (NACK) is inferred by the sender from the absence of an ACK.
+ *
+ * A typical Econet transaction is a four-way handshake (two round trips), with
+ * an acknowledgement expected for each transmitted packet. The meaning of a
+ * NACK depends on the phase in which it occurs.
+ *
+ * Phase 1 (SCOUT):
+ * The sending station transmits a small SCOUT frame to determine reachability
+ * and willingness of the remote station to accept a follow-on DATA packet.
+ * Bus contention is expected during this phase and may cause corruption. A
+ * NACK here may indicate that the remote station was not ready, the SCOUT was
+ * not received, or the ACK was not seen by the sender. This phase is
+ * idempotent; retransmitting SCOUT is always safe.
+ *
+ * Phase 2 (DATA):
+ * Immediately following a successful SCOUT, with no intervening idle bus
+ * condition, the sender transmits the DATA packet. If the receiver accepts and
+ * processes the DATA but the ACK is lost, the sender will infer a NACK even
+ * though the receiver has advanced state. Retransmitting DATA in this case is
+ * unsafe because the receiver may be expecting the next packet.
+ *
+ * This enum encodes these different meanings.
+ */
+typedef enum
+{
+    ECONET_ACK,          ///< Packet was acknowledged
+    ECONET_NACK,         ///< Packet was not acknowledged (safe to retry)
+    ECONET_NACK_CORRUPT, ///< Packet may have been accepted (not safe to retry)
+    ECONET_SEND_ERROR,   ///< Send could not be started
+} econet_acktype_t;
+
 typedef struct
 {
     gpio_num_t clk_pin;            /*!< ADLC clock input pin */
@@ -75,7 +109,7 @@ extern QueueHandle_t econet_rx_packet_queue;
 void econet_setup(const econet_config_t *config);
 void econet_clock_reconfigure(void);
 void econet_start(void);
-bool econet_send(uint8_t *data, uint16_t length);
+econet_acktype_t econet_send(uint8_t *data, uint16_t length);
 void econet_rx_clear_bitmaps(void);
 void exonet_rx_enable_station(uint8_t station_id);
 void exonet_rx_enable_network(uint8_t network_id);

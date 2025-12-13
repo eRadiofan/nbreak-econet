@@ -42,7 +42,7 @@ volatile bool DRAM_ATTR tx_is_in_progress;
 
 static parlio_tx_unit_handle_t DRAM_ATTR tx_unit;
 static TaskHandle_t DRAM_ATTR tx_sender_task = NULL;
-static bool DRAM_ATTR tx_sent_ack;
+static econet_acktype_t DRAM_ATTR tx_sent_ack;
 
 // Outgoing frame
 static uint8_t DRAM_ATTR tx_flag_stream[ECONET_FLAGSTREAM_PADDING * ECONET_PARLIO_WIDTH];
@@ -278,15 +278,15 @@ static void IRAM_ATTR _tx_task(void *params)
         if (xQueueReceive(tx_command_queue, &cmd, 200) == pdFALSE)
         {
             ESP_LOGW(TAG, "Timeout waiting for scout ack");
-            tx_sent_ack = false;
+            tx_sent_ack = ECONET_NACK;
             xTaskNotifyGive(tx_sender_task);
             econet_stats.rx_nack_count++;
             continue;
         }
         if (cmd.cmd == 'I')
         {
-            ESP_LOGW(TAG, "Bus became idle whilst waiting for scout ack (%d)", econet_rx_is_idle());
-            tx_sent_ack = false;
+            ESP_LOGI(TAG, "Bus became idle whilst waiting for scout ack (%d)", econet_rx_is_idle());
+            tx_sent_ack = ECONET_NACK;
             xTaskNotifyGive(tx_sender_task);
             econet_stats.rx_nack_count++;
             continue;
@@ -299,7 +299,7 @@ static void IRAM_ATTR _tx_task(void *params)
         if (xQueueReceive(tx_command_queue, &cmd, 200) == pdFALSE)
         {
             ESP_LOGW(TAG, "Timeout waiting for data ack");
-            tx_sent_ack = false;
+            tx_sent_ack = ECONET_NACK_CORRUPT;
             xTaskNotifyGive(tx_sender_task);
             econet_stats.rx_nack_count++;
             continue;
@@ -307,19 +307,19 @@ static void IRAM_ATTR _tx_task(void *params)
         if (cmd.cmd == 'I')
         {
             ESP_LOGW(TAG, "Bus became idle whilst waiting for data ack");
-            tx_sent_ack = false;
+            tx_sent_ack = ECONET_NACK_CORRUPT;
             xTaskNotifyGive(tx_sender_task);
             econet_stats.rx_nack_count++;
             continue;
         }
 
-        tx_sent_ack = true;
+        tx_sent_ack = ECONET_ACK;
         xTaskNotifyGive(tx_sender_task);
         econet_stats.tx_frame_count++;
     }
 }
 
-bool econet_send(uint8_t *data, uint16_t length)
+econet_acktype_t econet_send(uint8_t *data, uint16_t length)
 {
     tx_sender_task = xTaskGetCurrentTaskHandle();
 
@@ -338,14 +338,14 @@ bool econet_send(uint8_t *data, uint16_t length)
     if (xQueueSend(tx_command_queue, &cmd, 1000) != pdTRUE)
     {
         ESP_LOGE(TAG, "Failed to post econet send command. This is a bug.");
-        return false;
+        return ECONET_SEND_ERROR;
     }
 
     // Wait for send completion (Full 4-way ACK or NACK)
-    if (ulTaskNotifyTake(pdTRUE, 2000) != pdTRUE)
+    if (ulTaskNotifyTake(pdTRUE, 10000) != pdTRUE)
     {
-        ESP_LOGE(TAG, "Timeout waiting for send. Missing clock?");
-        return false;
+        ESP_LOGE(TAG, "Timeout waiting for send. Missing clock or line jammed?");
+        return ECONET_SEND_ERROR;
     };
 
     return tx_sent_ack;
