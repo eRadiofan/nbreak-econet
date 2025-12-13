@@ -82,7 +82,7 @@
     <h2 class="text-sm font-semibold mb-1">Econet Clock Configuration</h2>
   
     <p class="text-xs text-gray-600">
-      The maximum tested Econet clock is <span class="font-semibold">100&nbsp;kHz</span>.
+      The maximum tested Econet clock is <span class="font-semibold">200&nbsp;kHz</span>.
       Higher frequencies may cause unreliable operation.
     </p>
   
