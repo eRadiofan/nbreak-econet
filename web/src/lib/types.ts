@@ -68,7 +68,6 @@ export type EconetClockSettings = {
   mode: ClockMode;
   internalFrequencyHz: number;
   internalDutyCycle: number; // percent, 0–100
-  termination: number; // -1 = feature absent, 0 = off, 1 = on
 };
 
 export type StatsStreamPayload = {
@@ -91,8 +90,6 @@ export type ClientMessage =
   | { type: "reboot"; id: number }
   | { type: "factory_reset"; id: number }
   | { type: "save_econet_clock"; id: number, settings: EconetClockSettings }
-  | { type: "get_econet_clock"; id: number };
-
-
-
-
+  | { type: "get_econet_clock"; id: number }
+  | { type: "get_econet_termination"; id: number }
+  | { type: "save_econet_termination"; id: number, value: number };

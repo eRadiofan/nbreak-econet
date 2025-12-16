@@ -34,7 +34,7 @@ typedef struct {
     uint32_t frequency_hz;
     uint32_t duty_pc;
     econet_clock_mode_t mode;
-    int8_t termination;
+    int8_t termination;       // -1 = feature missing from circuitry
 } config_econet_clock_t;
 
 typedef struct

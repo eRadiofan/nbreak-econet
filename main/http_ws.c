@@ -326,6 +326,9 @@ static esp_err_t ws_handle_reboot(httpd_req_t *req, int request_id, const cJSON 
 
 static esp_err_t _ws_save_econet_clock(httpd_req_t *req, int request_id, const cJSON *payload)
 {
+    config_econet_clock_t clock_cfg;
+    config_load_econet_clock(&clock_cfg);
+
     const cJSON *settings = cJSON_GetObjectItemCaseSensitive(payload, "settings");
     if (!cJSON_IsObject(settings))
     {
@@ -335,7 +338,6 @@ static esp_err_t _ws_save_econet_clock(httpd_req_t *req, int request_id, const c
     const cJSON *mode = cJSON_GetObjectItemCaseSensitive(settings, "mode");
     const cJSON *freq = cJSON_GetObjectItemCaseSensitive(settings, "internalFrequencyHz");
     const cJSON *duty = cJSON_GetObjectItemCaseSensitive(settings, "internalDutyCycle");
-    const cJSON *term = cJSON_GetObjectItemCaseSensitive(settings, "termination");
 
     if (!cJSON_IsString(mode) || !cJSON_IsNumber(freq) || !cJSON_IsNumber(duty))
     {
@@ -347,12 +349,9 @@ static esp_err_t _ws_save_econet_clock(httpd_req_t *req, int request_id, const c
         return send_err_response(req, request_id, "Unacceptable clock values");
     }
 
-    config_econet_clock_t clock_cfg = {
-        .mode = !strcmp(mode->valuestring, "internal") ? ECONET_CLOCK_INTERNAL : ECONET_CLOCK_EXTERNAL,
-        .frequency_hz = freq->valueint,
-        .duty_pc = duty->valueint,
-        .termination = term->valueint
-    };
+    clock_cfg.mode = !strcmp(mode->valuestring, "internal") ? ECONET_CLOCK_INTERNAL : ECONET_CLOCK_EXTERNAL;
+    clock_cfg.frequency_hz = freq->valueint;
+    clock_cfg.duty_pc = duty->valueint;
 
     config_save_econet_clock(&clock_cfg);
 
@@ -372,13 +371,43 @@ static esp_err_t _ws_get_econet_clock(httpd_req_t *req, int request_id, const cJ
              "\"settings\": {"
              "\"mode\": \"%s\","
              "\"internalFrequencyHz\": %lu,"
-             "\"internalDutyCycle\": %lu,"
-             "\"termination\": %d"
+             "\"internalDutyCycle\": %lu"
              "}}",
              request_id,
              clock_cfg.mode == ECONET_CLOCK_INTERNAL ? "internal" : "external",
              clock_cfg.frequency_hz,
-             clock_cfg.duty_pc,
+             clock_cfg.duty_pc);
+    return _ws_send(req, response);
+}
+
+static esp_err_t _ws_save_econet_termination(httpd_req_t *req, int request_id, const cJSON *payload)
+{
+    config_econet_clock_t clock_cfg;
+    config_load_econet_clock(&clock_cfg);
+    const cJSON *value = cJSON_GetObjectItemCaseSensitive(payload, "value");
+
+    if (!cJSON_IsNumber(value) || (value->valueint != 0 && value->valueint != 1))
+    {
+        return send_err_response(req, request_id, "Missing or incorrect value");
+    }
+    clock_cfg.termination = value->valueint;
+
+    config_save_econet_clock(&clock_cfg);
+
+    return send_ok_response(req, request_id);
+}
+
+static esp_err_t _ws_get_econet_termination(httpd_req_t *req, int request_id, const cJSON *payload)
+{
+    config_econet_clock_t clock_cfg;
+    config_load_econet_clock(&clock_cfg);
+
+    char response[256];
+    snprintf(response, sizeof(response),
+             "{\"type\":\"response\",\"id\": %d, \"ok\":true,"
+             "\"value\": %d"
+             "}",
+             request_id,
              clock_cfg.termination);
     return _ws_send(req, response);
 }
@@ -398,7 +427,8 @@ static const struct
     {"save_econet", _ws_save_econet},
     {"get_econet_clock", _ws_get_econet_clock},
     {"save_econet_clock", _ws_save_econet_clock},
-
+    {"get_econet_termination", _ws_get_econet_termination},
+    {"save_econet_termination", _ws_save_econet_termination}
 };
 
 static esp_err_t _ws_dispatch(httpd_req_t *req, const char *type, int id, const cJSON *payload)

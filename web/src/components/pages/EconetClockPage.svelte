@@ -7,8 +7,7 @@
     let clockSettings: EconetClockSettings = {
       mode: "internal",
       internalFrequencyHz: 100000,
-      internalDutyCycle: 50,
-      termination: -1
+      internalDutyCycle: 50
     };
 
     let loading = true;
@@ -16,7 +15,12 @@
     let saving = false;
     let saveStatus: "idle" | "success" | "error" = "idle";
     let saveError = "";
-  
+
+    let savingTerm = false;
+    let saveTermStatus: "idle" | "success" | "error" = "idle";
+    let saveTermError = "";
+    let econet_termination = -1;
+
     $: isConnected = $connectionState === "connected";
     $: formDisabled = loading || saving || !isConnected;
   
@@ -38,8 +42,21 @@
       } finally {
         loading = false;
       }
-    });
+      try {
+        const res = await sendWsRequest({ type: "get_econet_termination" });
   
+        if (res.ok && Number.isInteger(res.value)) {
+          econet_termination = res.value;
+        } else {
+          loadError = res.error ?? "Failed to load Econet termination settings";
+        }
+      } catch {
+        loadError = "Connection error while loading Econet termination settings";
+      } finally {
+        loading = false;
+      }
+    });
+
     async function saveClockSettings() {
       if (formDisabled) return;
   
@@ -68,26 +85,26 @@
     }
 
     async function saveTerminationSettings() {
-      saving = true;
-      saveStatus = "idle";
-      saveError = "";
+      savingTerm = true;
+      saveTermStatus = "idle";
+      saveTermError = "";
       try {
         const res = await sendWsRequest({
-          type: "save_econet_clock",
-          settings: clockSettings,
+          type: "save_econet_termination",
+          value: econet_termination,
         });
-  
+
         if (res.ok) {
-          saveStatus = "success";
+          saveTermStatus = "success";
         } else {
-          saveStatus = "error";
-          saveError = res.error ?? "Failed to save Econet termination settings";
+          saveTermStatus = "error";
+          saveTermError = res.error ?? "Failed to save Econet termination settings";
         }
       } catch (e) {
-        saveStatus = "error";
-        saveError = "Connection error while saving Econet termination settings";
+        saveTermStatus = "error";
+        saveTermError = "Connection error while saving Econet termination settings";
       } finally {
-        saving = false;
+        savingTerm = false;
       }
     }
 
@@ -222,7 +239,7 @@
     </div>
   </section>
 
-{#if clockSettings.termination >= 0}
+{#if econet_termination >= 0}
   <section class="bg-white rounded-lg shadow-sm p-4 space-y-4 max-w-md">
     <h2 class="text-sm font-semibold mb-1">Econet Interface Termination</h2>
     <p class="text-xs text-gray-600">
@@ -241,7 +258,7 @@
             type="radio"
             name="termination"
             value={0}
-            bind:group={clockSettings.termination}
+            bind:group={econet_termination}
           />
           <span>Off</span>
         </label>
@@ -251,7 +268,7 @@
             type="radio"
             name="termination"
             value={1}
-            bind:group={clockSettings.termination}
+            bind:group={econet_termination}
           />
           <span>On</span>
         </label>
@@ -264,20 +281,20 @@
         class="px-3 py-1.5 text-xs rounded-md bg-sky-600 text-white hover:bg-sky-700 disabled:opacity-50"
         on:click={saveTerminationSettings}
       >
-        {#if saving}
+        {#if savingTerm}
           Saving...
         {:else}
           Save and activate
         {/if}
       </button>
 
-      {#if saveStatus === "success"}
+      {#if saveTermStatus === "success"}
         <p class="text-[11px] text-green-600">
           Termination settings saved.
         </p>
       {:else if saveStatus === "error"}
         <p class="text-[11px] text-red-600">
-          {saveError}
+          {saveTermError}
         </p>
       {/if}
     </div>

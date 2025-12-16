@@ -219,6 +219,7 @@ void config_init(void)
 esp_err_t config_save_econet_clock(const config_econet_clock_t *cfg) {
     if (cfg->termination >= 0)
         gpio_set_level(10, cfg->termination);
+
     return _save_config("econet_clock", cfg, sizeof(*cfg));
 }
 

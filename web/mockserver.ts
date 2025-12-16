@@ -158,8 +158,7 @@ export function mockWsPlugin(): PluginOption {
               let response_settings: EconetClockSettings = {
                 mode: "internal",
                 internalFrequencyHz: 100000,
-                internalDutyCycle: 30,
-                termination: 1
+                internalDutyCycle: 30
               }
               let response: ServerMessage = {
                 type: "response",
@@ -178,7 +177,26 @@ export function mockWsPlugin(): PluginOption {
               };
               ws.send(JSON.stringify(response));
             }
-  
+
+            if (msg.type=="get_econet_termination") {
+              let response: ServerMessage = {
+                type: "response",
+                id: msg.id,
+                ok: true,
+                value: 1
+              }
+              ws.send(JSON.stringify(response));
+            }
+
+            if (msg.type=="save_econet_termination") {
+              let response: ServerMessage = {
+                type: "response",
+                id: msg.id,
+                error: "No saving for you",
+              };
+              ws.send(JSON.stringify(response));
+            }
+
             if (msg.type == "save_econet") {
               msg?.settings?.econetStations?.forEach(n=>{
                 console.log(`ECO Station ${n.station_id}`);
