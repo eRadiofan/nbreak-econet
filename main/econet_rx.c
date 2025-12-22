@@ -304,7 +304,7 @@ void econet_rx_setup(void)
     ESP_ERROR_CHECK(parlio_new_rx_unit(&rx_config, &rx_unit));
 
     parlio_rx_soft_delimiter_config_t delimiter_cfg = {
-        .sample_edge = PARLIO_SAMPLE_EDGE_NEG, // Is this inverted in hardware? Docs are clear as mud.
+        .sample_edge = PARLIO_SAMPLE_EDGE_POS,
         .bit_pack_order = PARLIO_BIT_PACK_ORDER_MSB,
         .timeout_ticks = 0,
         .eof_data_len = 1,

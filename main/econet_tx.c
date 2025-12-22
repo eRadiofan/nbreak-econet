@@ -54,7 +54,6 @@ static size_t DRAM_ATTR tx_bits_len;
 
 // Custom ParlIO driver
 static volatile bool DRAM_ATTR is_flagstream_queued;
-void parlio_tx_neg_edge(parlio_tx_unit_handle_t tx_unit);
 void parlio_tx_go(parlio_tx_unit_handle_t tx_unit);
 esp_err_t parlio_tx_unit_pretransmit(parlio_tx_unit_handle_t tx_unit, const void *payload, size_t payload_bits, const parlio_transmit_config_t *config);
 void IRAM_ATTR econet_tx_pre_go(void)
@@ -392,12 +391,6 @@ void econet_tx_setup(void)
 
 void econet_tx_start(void)
 {
-    // Hack: The .sample_edge parameter doesn't actually work.
-    // Whatever you set it to it always seems to make output changes on the POS edge
-    // So this function uses the GPIO matrix to invert the clock signal prior to
-    // delivery to the peripheral.
-    parlio_tx_neg_edge(tx_unit);
-
     ESP_ERROR_CHECK(parlio_tx_unit_enable(tx_unit));
     xTaskCreate(_tx_task, "adlc_tx", 8192, NULL, 24, NULL);
 }

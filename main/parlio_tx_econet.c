@@ -17,14 +17,6 @@
 #include "driver/parlio_tx.h"
 #include "parlio_tx_econet_priv.h"
 
-void parlio_tx_neg_edge(parlio_tx_unit_t *tx_unit)
-{
-    int group_id = tx_unit->base.group->group_id;
-    int unit_id = tx_unit->base.unit_id;
-    esp_rom_gpio_connect_in_signal(tx_unit->clk_in_gpio_num,
-                                   parlio_periph_signals.groups[group_id].tx_units[unit_id].clk_in_sig, true);
-}
-
 static void parlio_mount_buffer(parlio_tx_unit_t *tx_unit, parlio_tx_trans_desc_t *t)
 {
     // DMA transfer data based on bytes not bits, so convert the bit length to bytes, round up
