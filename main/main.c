@@ -138,6 +138,7 @@ void app_main(void)
                            "\"rx_oversize_count\":%lu,"
                            "\"rx_ack_count\":%lu,"
                            "\"rx_nack_count\":%lu,"
+                           "\"rx_error_count\":%lu,"
                            "\"tx_frame_count\":%lu,"
                            "\"tx_ack_count\":%lu"
                            "}"
@@ -159,6 +160,7 @@ void app_main(void)
                            eco.rx_oversize_count,
                            eco.rx_ack_count,
                            eco.rx_nack_count,
+                           eco.rx_error_count,
                            eco.tx_frame_count,
                            eco.tx_ack_count);
 

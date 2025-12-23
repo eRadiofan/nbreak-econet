@@ -76,6 +76,7 @@ typedef struct
     uint32_t rx_oversize_count;
     uint32_t rx_ack_count;
     uint32_t rx_nack_count;
+    uint32_t rx_error_count;
     uint32_t tx_frame_count;
     uint32_t tx_ack_count;
 } econet_stats_t;

@@ -344,7 +344,7 @@ static void _aun_udp_rx_process(econet_station_t *econet_station)
 
     // Send to Beeb (but only if we didn't get acknowledgement before for this packet.)
     // NOTE: We're not encountering out of order but if we do then we'll need a different strategy to reorder them.
-    if (ack_seq != aun_station->last_acked_seq || aun_station->last_tx_result == ECONET_NACK)
+    if (ack_seq != aun_station->last_acked_seq || aun_station->last_tx_result == ECONET_NACK || aun_station->last_tx_result == ECONET_NACK_CORRUPT)
     {
         ESP_LOGI(TAG, "[%05d] Sending %d byte frame from %d.%d (%s) to Econet %d.%d",
                  ack_seq, len,

@@ -18,6 +18,7 @@
     { key: "rx_oversize_count", label: "RX Oversize", warn: true },
     { key: "rx_ack_count", label: "RX ACK" },
     { key: "rx_nack_count", label: "RX NACK", warn: true },
+    { key: "rx_error_count", label: "RX Error", warn: true },
     { key: "tx_frame_count", label: "TX Frames" },
     { key: "tx_ack_count", label: "TX ACK" },
   ];
@@ -40,7 +41,7 @@
 <section class="bg-white rounded-lg shadow-sm p-4">
   <h2 class="text-sm font-semibold mb-3">Econet Stats</h2>
 
-  <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
     {#each econetFields as field}
       <StatItem
         label={field.label}
@@ -54,7 +55,7 @@
 <section class="bg-white rounded-lg shadow-sm p-4">
   <h2 class="text-sm font-semibold mb-3">AUN Bridge Stats</h2>
 
-  <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+  <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
     {#each aunFields as field}
       <StatItem
         label={field.label}

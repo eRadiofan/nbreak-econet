@@ -37,6 +37,7 @@ export const econetStats = writable<EconetStats>({
   rx_oversize_count: 0,
   rx_ack_count: 0,
   rx_nack_count: 0,
+  rx_error_count: 0,
   tx_frame_count: 0,
   tx_ack_count: 0,
 });

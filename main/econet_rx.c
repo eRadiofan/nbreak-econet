@@ -32,16 +32,16 @@ static parlio_rx_unit_handle_t rx_unit;
 static parlio_rx_delimiter_handle_t rx_delimiter;
 static uint8_t DRAM_ATTR rx_payload_dma_buffer[16];
 
-static uint8_t DRAM_ATTR _raw_shift_in;
-static uint8_t DRAM_ATTR _recv_data_shift_in;
-static uint32_t DRAM_ATTR _recv_data_bit;
-static uint32_t DRAM_ATTR is_frame_active;
+static volatile uint8_t DRAM_ATTR _raw_shift_in;
+static volatile uint8_t DRAM_ATTR _recv_data_shift_in;
+static volatile uint8_t DRAM_ATTR _recv_data_bit;
+static volatile uint8_t DRAM_ATTR is_frame_active;
 static uint8_t DRAM_ATTR rx_packet_buffers[ECONET_PACKET_BUFFER_COUNT][ECONET_MTU + ECONET_BUFFER_WORKSPACE];
-static uint8_t *DRAM_ATTR rx_buf;
-static uint32_t DRAM_ATTR rx_packet_buffer_index;
-static uint16_t DRAM_ATTR rx_frame_len;
-static uint16_t DRAM_ATTR rx_crc;
-static uint8_t DRAM_ATTR rx_idle_one_counter;
+static volatile uint8_t *DRAM_ATTR rx_buf;
+static volatile uint8_t DRAM_ATTR rx_packet_buffer_index;
+static volatile uint16_t DRAM_ATTR rx_frame_len;
+static volatile uint16_t DRAM_ATTR rx_crc;
+static volatile uint8_t DRAM_ATTR rx_idle_one_counter;
 
 typedef struct
 {
@@ -120,7 +120,8 @@ static inline void IRAM_ATTR _complete_frame()
                 .data = &rx_packet_buffers[rx_packet_buffer_index][0],
                 .length = data_len,
             };
-            xQueueSendFromISR(econet_rx_packet_queue, &rx_pkt, NULL);
+            if (xQueueSendFromISR(econet_rx_packet_queue, &rx_pkt, NULL) == errQUEUE_FULL)
+              econet_stats.rx_error_count++;
 
             rx_packet_buffer_index++;
             if (rx_packet_buffer_index >= ECONET_PACKET_BUFFER_COUNT)
@@ -152,9 +153,12 @@ static inline void IRAM_ATTR _complete_frame()
     }
 }
 
+/* Process each incoming bit, detecting idling, flags, aborts and removing stuffing bits
+ * Add data to frame, computing the CRC
+ */
 static inline void IRAM_ATTR _clk_bit(uint8_t c)
 {
-
+    // Check idle condition
     if (c && !tx_is_in_progress)
     {
         if (rx_idle_one_counter < ECONET_IDLE_BITS)
@@ -224,21 +228,20 @@ static inline void IRAM_ATTR _clk_bit(uint8_t c)
         return;
     }
 
-    // Bit stuffing
+    // Remove bit stuffing
     if ((_raw_shift_in & 0x3f) == 0x3e)
     {
         return;
     }
 
-    // Data
+    // Add data to frame
     _recv_data_shift_in = (_recv_data_shift_in >> 1) | (c << 7); // Data is LSB first
     _recv_data_bit += 1;
     if (_recv_data_bit == 8)
     {
-
         // Update CRC
         rx_crc ^= _recv_data_shift_in;
-        for (int j = 0; j < 8; j++)
+        for (uint8_t j = 0; j < 8; j++)
         {
             rx_crc = (rx_crc & 0x0001) ? (uint16_t)((rx_crc >> 1) ^ 0x8408)
                                        : (uint16_t)(rx_crc >> 1);
@@ -256,16 +259,17 @@ static inline void IRAM_ATTR _clk_bit(uint8_t c)
     }
 }
 
+// 1 byte of data received, process each bit
 static bool IRAM_ATTR _on_recv_callback(parlio_rx_unit_handle_t rx_unit, const parlio_rx_event_data_t *edata, void *user_data)
 {
-    gpio_set_level(18, 1);
+    //gpio_set_level(18, 1);
     uint8_t c = *((uint8_t *)edata->data);
-    for (int i = 0; i < 8; i++)
+    for (uint8_t i = 0; i < 8; i++)
     {
         _clk_bit((c & 0x80) >> 7);
         c <<= 1;
     }
-    gpio_set_level(18, 0);
+    //gpio_set_level(18, 0);
 
     return false;
 }
@@ -275,6 +279,10 @@ bool econet_rx_is_idle(void)
     return rx_idle_one_counter == ECONET_IDLE_BITS;
 }
 
+/* Configure DMA transfers to a 16 byte data buffer, sampled on the positive edge of a free running input clock,
+ * packed MSB, triggering EOF interrupt (_on_recv_callback) every byte transferred.
+ * Also creates 4 RTOS queues and 3 large packet buffers.
+ */
 void econet_rx_setup(void)
 {
     parlio_rx_unit_config_t rx_config = {
@@ -321,6 +329,8 @@ void econet_rx_setup(void)
     rx_buf = &rx_packet_buffers[rx_packet_buffer_index][ECONET_BUFFER_WORKSPACE];
 }
 
+/* Initiates continuous (and partial) reception into the 16 bytes, using 16 receive calls
+ */
 void econet_rx_start(void)
 {
     ESP_ERROR_CHECK(parlio_rx_unit_enable(rx_unit, true));

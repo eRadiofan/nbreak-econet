@@ -42,15 +42,15 @@ volatile bool DRAM_ATTR tx_is_in_progress;
 
 static parlio_tx_unit_handle_t DRAM_ATTR tx_unit;
 static TaskHandle_t DRAM_ATTR tx_sender_task = NULL;
-static econet_acktype_t DRAM_ATTR tx_sent_ack;
+static volatile econet_acktype_t DRAM_ATTR tx_sent_ack;
 
 // Outgoing frame
 static uint8_t DRAM_ATTR tx_flag_stream[ECONET_FLAGSTREAM_PADDING * ECONET_PARLIO_WIDTH];
-static uint32_t DRAM_ATTR tx_flag_stream_length;
-static size_t DRAM_ATTR scout_bits_len;
+static volatile uint32_t DRAM_ATTR tx_flag_stream_length;
+static volatile size_t DRAM_ATTR scout_bits_len;
 static uint8_t DRAM_ATTR scout_bits[32 * ECONET_PARLIO_WIDTH];
 static uint8_t DRAM_ATTR tx_bits[ECONET_MTU * ECONET_PARLIO_WIDTH];
-static size_t DRAM_ATTR tx_bits_len;
+static volatile size_t DRAM_ATTR tx_bits_len;
 
 // Custom ParlIO driver
 static volatile bool DRAM_ATTR is_flagstream_queued;
@@ -118,7 +118,7 @@ static inline void IRAM_ATTR _add_bit(tx_bitstuff_ctx *ctx, uint8_t bit)
 
 static inline void IRAM_ATTR _add_byte_unstuffed(tx_bitstuff_ctx *ctx, uint8_t c)
 {
-    for (int j = 0; j < 8; j++)
+    for (uint8_t j = 0; j < 8; j++)
     {
         _add_bit(ctx, c & 1);
         c >>= 1;
@@ -128,7 +128,7 @@ static inline void IRAM_ATTR _add_byte_unstuffed(tx_bitstuff_ctx *ctx, uint8_t c
 static inline void IRAM_ATTR _add_byte_stuffed(tx_bitstuff_ctx *ctx, uint8_t c)
 {
 
-    for (int j = 0; j < 8; j++)
+    for (uint8_t j = 0; j < 8; j++)
     {
         uint8_t bit = (c & 1);
         _add_bit(ctx, bit);
@@ -293,6 +293,7 @@ static void IRAM_ATTR _tx_task(void *params)
 
         // Send payload frame
         _transmit_bits(tx_bits, tx_bits_len);
+        _queue_flagstream();
 
         // Wait for ack
         if (xQueueReceive(tx_command_queue, &cmd, 200) == pdFALSE)
