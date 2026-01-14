@@ -54,6 +54,7 @@ static volatile size_t DRAM_ATTR tx_bits_len;
 
 // Custom ParlIO driver
 static volatile bool DRAM_ATTR is_flagstream_queued;
+void parlio_tx_edge(parlio_tx_unit_handle_t tx_unit, bool invert);
 void parlio_tx_go(parlio_tx_unit_handle_t tx_unit);
 esp_err_t parlio_tx_unit_pretransmit(parlio_tx_unit_handle_t tx_unit, const void *payload, size_t payload_bits, const parlio_transmit_config_t *config);
 void IRAM_ATTR econet_tx_pre_go(void)
@@ -323,8 +324,16 @@ econet_acktype_t econet_send(uint8_t *data, uint16_t length)
 {
     tx_sender_task = xTaskGetCurrentTaskHandle();
 
-    // Generate scout frame
-    scout_bits_len = _generate_frame_bits(scout_bits, sizeof(scout_bits), data, 6);
+    // Generate scout
+    econet_scout_t scout;
+    memcpy(&scout, data, sizeof(scout));
+    if (scout.port == 0)
+    {
+        ESP_LOGW(TAG, "Discarded immediate mode packet. (TX)");
+        return ECONET_SEND_ERROR;
+    }
+
+    scout_bits_len = _generate_frame_bits(scout_bits, sizeof(scout_bits), (uint8_t *)&scout, sizeof(scout));
 
     // Generate payload frame
     data[5] = data[3];
@@ -392,6 +401,11 @@ void econet_tx_setup(void)
 
 void econet_tx_start(void)
 {
+    // Hack: The .sample_edge parameter doesn't actually work.
+    // Whatever you set it to it always seems to make output changes on the POS edge
+    // So this function uses the GPIO matrix to invert the clock signal prior to
+    // delivery to the peripheral.
+    parlio_tx_edge(tx_unit, false);
     ESP_ERROR_CHECK(parlio_tx_unit_enable(tx_unit));
     xTaskCreate(_tx_task, "adlc_tx", 8192, NULL, 24, NULL);
 }

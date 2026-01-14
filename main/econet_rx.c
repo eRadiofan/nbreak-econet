@@ -262,14 +262,12 @@ static inline void IRAM_ATTR _clk_bit(uint8_t c)
 // 1 byte of data received, process each bit
 static bool IRAM_ATTR _on_recv_callback(parlio_rx_unit_handle_t rx_unit, const parlio_rx_event_data_t *edata, void *user_data)
 {
-    //gpio_set_level(18, 1);
     uint8_t c = *((uint8_t *)edata->data);
     for (uint8_t i = 0; i < 8; i++)
     {
         _clk_bit((c & 0x80) >> 7);
         c <<= 1;
     }
-    //gpio_set_level(18, 0);
 
     return false;
 }
